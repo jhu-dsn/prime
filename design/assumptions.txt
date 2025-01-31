@@ -1,0 +1,24 @@
+1. Update Message
+
+   a. The configuration file will allow a server to map from client_id
+      to an <IP, Port> pair.  
+
+   b. Servers know the public key of the client and can verify
+      signatures contained in update messages.
+
+   c. If a client wants to ensure that a request is executed, it needs
+      to wait for a reply before sending the next request.  If it does
+      not wait, it is possible there can be gaps.
+
+   d. Servers store a copy of the latest reply sent to each client.
+      If an update with an older timestamp is received, it can safely
+      be discarded because the client must have already obtained a
+      response.  If an update with the current timestamp is received,
+      the server sends the stored copy of the latest reply.  If an
+      update with a newer timestamp is received, the server processes
+      it.
+
+   e. Servers store, for each client, the timestamp of the latest
+      update executed for that client.  Initialized to zero.  
+
+

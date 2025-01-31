@@ -1,0 +1,38 @@
+Upon receiving PO-Request(i, j, content):
+
+     a. If I don't yet have a PO-Request for (i, j), store it and mark
+     	that I should ack it.
+
+     b. If I did have one for (i, j), then if it matches, don't store
+     	it but mark that I should ack it again.  If it doesn't match,
+     	then construct a blacklist message and broadcast it to
+     	everyone because it represents proof that server i is
+     	compromised.
+
+   	[TODO: When handling the blacklist message, we don't want it
+   	to prevent execution if some servers didn't see a conflict and
+   	the PO-Request gets pushed through the system.  The
+   	blacklisting should probably only take effect for later
+   	requests, not for this one, to avoid this issue.]
+
+	[]
+
+     c. Other interested modules:
+
+     	(1) Module that checks to see if I had a hole for execution
+     	    that has now been filled.  Give control to this module, in
+     	    some way, to allow it to check.
+
+        (2) Module that actually sends PO-Ack messages.
+
+     d. Important properties:
+
+     	(1) Correct servers will never send two PO-Acks for (i, j)
+     	    containing different digests.  Proof: the PO-Request is
+     	    stored the first time, when the slot is empty.  If another
+     	    one arrives, an ack is only sent if the digest matches the
+     	    one for the PO-Request already stored in the slot.
+
+Upon receiving PO-Ack(machine_id, (i, j), digest):
+
+     a. 

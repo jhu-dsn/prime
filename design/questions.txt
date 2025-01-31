@@ -1,0 +1,5 @@
+1. Can we avoid imposing a maximum size on client updates?  If the
+   maximum packet size is roughly 1500 bytes and the signature size is
+   128 bytes, then we have maybe 1300 bytes of data.  What if an
+   application requires more than this?
+
