@@ -21,9 +21,13 @@
  * Special thanks to Brian Coan for major contributions to the design of
  * the Prime algorithm. 
  *  	
- * Copyright (c) 2008 - 2010 
+ * Copyright (c) 2008 - 2013 
  * The Johns Hopkins University.
  * All rights reserved.
+ *
+ * Major Contributor(s):
+ * --------------------
+ *     Jeff Seibert
  *
  */
 
@@ -121,7 +125,7 @@ typedef struct dummy_benchmark_struct {
   int32u num_signatures;
   int32u total_signed_messages;
   int32u max_signature_batch_size;
-  int32u signature_types[CLIENT_RESPONSE+1];
+  int32u signature_types[LAST_MESSAGE_TYPE];
 
   double num_throttle_sends;
 
@@ -216,6 +220,7 @@ typedef struct dummy_ord_slot {
   int32u view;
 
   /* current pre prepare */
+  signed_message *pre_prepare;
   int32u pre_prepare_parts[MAX_PRE_PREPARE_PARTS+1];
   int32u total_parts;
   int32u num_parts_collected;
@@ -264,6 +269,8 @@ typedef struct dummy_ord_slot {
 typedef struct dummy_ordering_data_struct {
   /* The local ARU. */
   int32u ARU;
+
+  int32u server_aru[NUM_SERVER_SLOTS];
   
   /* Number of events we've ordered */
   int32u events_ordered;
@@ -285,6 +292,82 @@ typedef struct dummy_ordering_data_struct {
 
 } ordering_data_struct;
 
+
+/* data structure for the suspect leader protocol */
+
+typedef struct dummy_suspect_leader_data_struct {
+
+    double tats_if_leader[NUM_SERVER_SLOTS];
+    double tat_leader_ubs[NUM_SERVER_SLOTS];
+    double reported_tats[NUM_SERVER_SLOTS];
+
+    double tat_leader;
+    double tat_acceptable;
+
+    int32u ping_seq_num;
+
+    util_stopwatch rtt;
+
+    util_stopwatch turnaround_time;
+    double max_tat;
+    int32u turnaround_on;
+
+    /* I've essentially merged the suspect leader protocol and the leader
+	election protocol together into the same code. Below are the 
+	data structures for it */
+
+    signed_message *new_leader[NUM_SERVER_SLOTS];
+    int32u new_leader_count;
+    int32u sent_proof;
+
+} suspect_leader_data_struct;
+
+/* Data struct for the reliable broadcast protocol */
+/* This protocol assumes a correct node only sends one message at a time */
+
+typedef struct dummy_reliable_broadcast_data_struct {
+    int32u seq_num[NUM_SERVER_SLOTS];
+    //signed_message *rb_init[NUM_SERVER_SLOTS];
+    int32u rb_echo[NUM_SERVER_SLOTS][NUM_SERVER_SLOTS];
+    int32u rb_ready[NUM_SERVER_SLOTS][NUM_SERVER_SLOTS];
+    int32u rb_step[NUM_SERVER_SLOTS];
+    int32u sent_message;
+
+} reliable_broadcast_data_struct;
+
+/* Data struct for view change protocol */
+
+typedef struct dummy_view_change_struct {
+  int32u numSeq;
+  int32u curSeq;
+  stdit seq_it;
+  int32u received_report[NUM_SERVER_SLOTS];
+  report_message report[NUM_SERVER_SLOTS];
+  int32u executeTo;
+  dll_struct my_pc_set;
+  dll_struct pc_set[NUM_SERVER_SLOTS];
+
+  int32u complete_state; //bitmap of machine ids
+  int32u sent_vc_list;
+  int32u received_vc_list[NUM_SERVER_SLOTS];
+  vc_list_message vc_list[NUM_SERVER_SLOTS];
+ 
+  int32u sent_vc_partial_sig[NUM_SERVER_SLOTS];
+  int32u received_vc_partial_sig[NUM_SERVER_SLOTS][NUM_SERVERS];
+  vc_partial_sig_message vc_partial_sig[NUM_SERVER_SLOTS][NUM_SERVERS];
+
+  int32u sent_replay;
+  int32u sent_prepare;
+  signed_message* replay;
+  signed_message* replay_prepare[NUM_SERVER_SLOTS];
+  int32u prepare_ready;
+  signed_message* replay_commit[NUM_SERVER_SLOTS];
+  int32u sent_commit;
+  int32u commit_ready;
+  int32u highest_server_id;
+
+} view_change_struct;
+
 typedef struct dummy_signature_data_struct {
   dll_struct pending_messages_dll;
 
@@ -299,17 +382,26 @@ typedef struct dummy_signature_data_struct {
 
 } signature_data_struct;
 
+
+
 /* This stores all of the server's state, including Preordering
  * and Ordering state. */
 typedef struct dummy_server_data_struct {
   /* The view number.  For the tests, should always be 1. */
   int View;
+  int32u preinstall;
   
   /* The Pre-Order data structure */
   po_data_struct PO;
   
   /* The Ordering data structure */
   ordering_data_struct ORD;
+
+  suspect_leader_data_struct SUS;
+
+  reliable_broadcast_data_struct REL;
+
+  view_change_struct VIEW;
 
   signature_data_struct SIG;
 

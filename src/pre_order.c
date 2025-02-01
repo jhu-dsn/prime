@@ -21,9 +21,13 @@
  * Special thanks to Brian Coan for major contributions to the design of
  * the Prime algorithm. 
  *  	
- * Copyright (c) 2008 - 2010 
+ * Copyright (c) 2008 - 2013 
  * The Johns Hopkins University.
  * All rights reserved.
+ *
+ * Major Contributor(s):
+ * --------------------
+ *     Jeff Seibert
  *
  */
 
@@ -43,6 +47,7 @@
 #include "signature.h"
 #include "recon.h"
 #include "dispatcher.h"
+#include "suspect_leader.h"
 
 /* Globally Accessible Variables */
 extern server_variables    VAR;
@@ -156,9 +161,9 @@ void PRE_ORDER_Attempt_To_Send_PO_Request()
 
     /* Sanity check.  This indicates an infinite loop. Should never happen. */
     if(counter == 500) {
-      Alarm(PRINT, "Length of po_request_dll is %d\n", 
+      Alarm(DEBUG, "Length of po_request_dll is %d\n", 
 	    DATA.PO.po_request_dll.length);
-      Alarm(PRINT, "DATA.PO.po_seq_num = %d\n", DATA.PO.po_seq_num);
+      Alarm(DEBUG, "DATA.PO.po_seq_num = %d\n", DATA.PO.po_seq_num);
       assert(0);
     }
   }
@@ -181,7 +186,11 @@ void PRE_ORDER_Periodically(int dummy, void *dummyp)
 {
   sp_time t;
 
-  SIG_Attempt_To_Generate_PO_Messages();
+  //TODO: I want to stop measuring turnaround time during preinstall
+  // but is this the right way to do it?
+  if (!DATA.preinstall) {
+    SIG_Attempt_To_Generate_PO_Messages();
+  }
 
   /* Re-schedule the event for next time */
   t.sec  = PO_PERIODICALLY_SEC;
@@ -279,7 +288,10 @@ void PRE_ORDER_Send_PO_ARU()
   ack = PRE_ORDER_Construct_PO_ARU();
   assert(ack);
 
-  SIG_Add_To_Pending_Messages(ack, BROADCAST, UTIL_Get_Timeliness(PO_ARU));
+  //SIG_Add_To_Pending_Messages(ack, BROADCAST, UTIL_Get_Timeliness(PO_ARU));
+  UTIL_RSA_Sign_Message(ack); //need messages to be compact, so no merkle tree stuff...
+  UTIL_Broadcast(ack);
+  APPLY_PO_ARU(ack); //broadcast doesn't send it to myself, so apply to datastructs
   dec_ref_cnt(ack);
 
   /* Mark that we've just sent one so we don't do it again for awhile */
@@ -348,10 +360,16 @@ void PRE_ORDER_Send_Proof_Matrix()
       return;
   }
 
+
+  //JCS: Thesis specifies that each correct server should always periodically 
+  // send matrix
+
+  /*
   if (PRE_ORDER_Latest_Proof_Sent()) {
-    /* already sent the latest proof, don't send it again */
-    return;
+	//already sent the latest proof, don't send it again
+        return;
   }
+  */
 
   PRE_ORDER_Construct_Proof_Matrix(mset, &num_parts);
 
@@ -373,6 +391,8 @@ void PRE_ORDER_Send_Proof_Matrix()
   /* Mark that we've just sent a proof matrix so we don't do it again
    * for while. */
   UTIL_Stopwatch_Start(&DATA.PO.proof_matrix_sw);
+
+  SUSPECT_Start_Measure_TAT();
 }
 
 bool PRE_ORDER_Latest_Proof_Sent() 
@@ -425,11 +445,21 @@ void PRE_ORDER_Update_Latest_Proof_Sent()
 
 void PRE_ORDER_Upon_Receiving_Proof_Matrix(signed_message *mess)
 {
+   /* 
+    if (VAR.My_Server_ID == 2 && UTIL_I_Am_Leader()) {
+	Alarm(PRINT, "Replaying Proof_Matrix\n");
+	int i;
+	for (i = 0; i < 20; i++) {
+	    UTIL_Broadcast(mess);
+	}
+    }
+   */
+
   /* If the delay attack is running and I am the leader, then I must
    * respond. */
 
 #if DELAY_ATTACK
-  if (UTIL_I_Am_Leader()) {
+  if (VAR.My_Server_ID == 2 /*&& UTIL_I_Am_Leader()*/) {
     UTIL_DLL_Add_Data(&DATA.PO.proof_matrix_dll, mess);
     Alarm(DEBUG, "ADD\n"  );
   }
@@ -457,7 +487,7 @@ void PRE_ORDER_Garbage_Collect_PO_Slot(int32u server_id, int32u seq_num)
   stdhash_erase_key(&DATA.PO.History[server_id], &seq_num);
 
   if(seq_num != (DATA.PO.white_line[server_id] + 1)) {
-    Alarm(PRINT, "Garbage collecting %d %d, white_line+1 = %d\n",
+    Alarm(DEBUG, "Garbage collecting %d %d, white_line+1 = %d\n",
 	  server_id, seq_num, DATA.PO.white_line[server_id]+1);
     //assert(0);
   }

@@ -21,9 +21,13 @@
  * Special thanks to Brian Coan for major contributions to the design of
  * the Prime algorithm. 
  *  	
- * Copyright (c) 2008 - 2010 
+ * Copyright (c) 2008 - 2013 
  * The Johns Hopkins University.
  * All rights reserved.
+ *
+ * Major Contributor(s):
+ * --------------------
+ *     Jeff Seibert
  *
  */
 
@@ -34,5 +38,5 @@
 
 void APPLY_Message_To_Data_Structs(signed_message *mess); 
 void APPLY_Proof_Matrix           (signed_message *mess);
-
+void APPLY_PO_ARU      (signed_message *mess);
 #endif

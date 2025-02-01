@@ -21,9 +21,13 @@
  * Special thanks to Brian Coan for major contributions to the design of
  * the Prime algorithm. 
  *  	
- * Copyright (c) 2008 - 2010 
+ * Copyright (c) 2008 - 2013 
  * The Johns Hopkins University.
  * All rights reserved.
+ *
+ * Major Contributor(s):
+ * --------------------
+ *     Jeff Seibert
  *
  */
 
@@ -48,5 +52,9 @@
 
 /* Public */
 int32u VAL_Validate_Message( signed_message *message, int32u num_bytes ); 
+int32u VAL_Validate_Signed_Message(signed_message *mess, int32u num_bytes, 
+				   int32u verify_signature); 
+int32u VAL_Validate_Report	(report_message *report,   int32u num_bytes);
+int32u VAL_Validate_PC_Set	(pc_set_message *pc_set,   int32u num_bytes);
 
 #endif 

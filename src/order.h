@@ -21,9 +21,13 @@
  * Special thanks to Brian Coan for major contributions to the design of
  * the Prime algorithm. 
  *  	
- * Copyright (c) 2008 - 2010 
+ * Copyright (c) 2008 - 2013 
  * The Johns Hopkins University.
  * All rights reserved.
+ *
+ * Major Contributor(s):
+ * --------------------
+ *     Jeff Seibert
  *
  */
 
@@ -45,9 +49,10 @@ void ORDER_Execute_Event(signed_message *event);
 void ORDER_Execute_Commit(ord_slot *slot);
 
 void ORDER_Initialize_Data_Structure (void);
-
+void   ORDER_Periodically                (int dummy, void *dummyp);
 void ORDER_Update_Forwarding_White_Line (void);
 void ORDER_Attempt_To_Garbage_Collect_ORD_Slot (int32u seq);
+void ORDER_Garbage_Collect_ORD_Slot(ord_slot *slot);
 
 void ORDER_Attempt_To_Execute_Pending_Commits (int dummy, void *dummyp);
 

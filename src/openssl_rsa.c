@@ -21,9 +21,13 @@
  * Special thanks to Brian Coan for major contributions to the design of
  * the Prime algorithm. 
  *  	
- * Copyright (c) 2008 - 2010 
+ * Copyright (c) 2008 - 2013 
  * The Johns Hopkins University.
  * All rights reserved.
+ *
+ * Major Contributor(s):
+ * --------------------
+ *     Jeff Seibert
  *
  */
 
@@ -56,9 +60,6 @@
 #define NUMBER_OF_SERVERS        NUM_SERVERS
 #define NUMBER_OF_CLIENTS        NUM_CLIENTS
 
-/* This flag is used to remove crypto for testing -- this feature eliminates
- * security and Byzantine fault tolerance. */
-#define REMOVE_CRYPTO 0 
 
 /* Global variables */
 RSA *private_rsa; /* My Private Key */
@@ -79,9 +80,6 @@ void Write_BN(FILE *f, BIGNUM *bn)
   bn_buf = BN_bn2hex( bn );
   
   fprintf( f, "%s\n", bn_buf );
-
-  /* Note: The memory for the BIGNUM should be freed if the bignum will not
-   * be used again. TODO */ 
 }
 
 void Write_RSA( int32u rsa_type, int32u server_number, RSA *rsa) 
@@ -253,7 +251,7 @@ void OPENSSL_RSA_Make_Digest( const void *buffer, size_t buffer_size,
      * different digest algorithms. We currently use sha1. The returned digest
      * is for sha1 and therefore we currently assume that functions which use
      * this type of digest. It would be best to extend the encapsulation
-     * through our code. TODO Note that there may be an increase in
+     * through our code. Note that there may be an increase in
      * computational cost because these high-level functions are used. We might
      * want to test this and see if we take a performance hit. */
     
@@ -304,7 +302,7 @@ void OPENSSL_RSA_Make_Signature( const byte *digest_value, byte *signature )
    * assumed to be 20 bytes. */
 
 #if REMOVE_CRYPTO
-  UTIL_Busy_Wait(0.000005);
+  //UTIL_Busy_Wait(0.000005);
   return;
 #endif
   
@@ -342,7 +340,7 @@ int32u OPENSSL_RSA_Verify_Signature( const byte *digest_value,
     RSA *rsa; 
 
 #if REMOVE_CRYPTO 
-    UTIL_Busy_Wait(0.000005);
+    //UTIL_Busy_Wait(0.000005);
     return 1;
 #endif
     
@@ -387,7 +385,7 @@ void OPENSSL_RSA_Sign( const unsigned char *message, size_t message_length,
   unsigned char md_value[EVP_MAX_MD_SIZE];
 
 #if REMOVE_CRYPTO
-    UTIL_Busy_Wait(0.000005);
+    //UTIL_Busy_Wait(0.000005);
     return;
 #endif
 
@@ -416,7 +414,7 @@ int OPENSSL_RSA_Verify( const unsigned char *message, size_t message_length,
     unsigned char md_value[EVP_MAX_MD_SIZE];
 
 #if REMOVE_CRYPTO
-    UTIL_Busy_Wait(0.000005);
+    //UTIL_Busy_Wait(0.000005);
     return 1;
 #endif    
 

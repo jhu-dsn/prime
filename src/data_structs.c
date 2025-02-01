@@ -21,9 +21,13 @@
  * Special thanks to Brian Coan for major contributions to the design of
  * the Prime algorithm. 
  *  	
- * Copyright (c) 2008 - 2010 
+ * Copyright (c) 2008 - 2013 
  * The Johns Hopkins University.
  * All rights reserved.
+ *
+ * Major Contributor(s):
+ * --------------------
+ *     Jeff Seibert
  *
  */
 
@@ -43,6 +47,9 @@
 #include "stopwatch.h"
 #include "pre_order.h"
 #include "order.h"
+#include "suspect_leader.h"
+#include "view_change.h"
+#include "reliable_broadcast.h"
 #include "signature.h"
 #include "utility.h"
 
@@ -64,9 +71,13 @@ void DAT_Initialize()
   
   /* Initialize data structures */
   DATA.View    = 1;
+  DATA.preinstall = 0;
   PRE_ORDER_Initialize_Data_Structure();
   ORDER_Initialize_Data_Structure();
+  SUSPECT_Initialize_Data_Structure();
   SIG_Initialize_Data_Structure();
+  RELIABLE_Initialize_Data_Structure();
+  VIEW_Initialize_Data_Structure();
   Alarm(DEBUG, "Initialized PO, ORDER, and SIG data structures.\n");
 
   /* We need to initialize the erasure codes no matter what because
@@ -89,7 +100,7 @@ void DAT_Initialize()
   BENCH.num_signatures = 0;
   BENCH.total_signed_messages = 0;
   BENCH.max_signature_batch_size = 0;
-  for(i = 0; i < CLIENT_RESPONSE+1; i++)
+  for(i = 0; i < LAST_MESSAGE_TYPE; i++)
     BENCH.signature_types[i] = 0;
 
   sprintf(buf, "state_machine_out.%d.log", VAR.My_Server_ID);

@@ -21,9 +21,13 @@
  * Special thanks to Brian Coan for major contributions to the design of
  * the Prime algorithm. 
  *  	
- * Copyright (c) 2008 - 2010 
+ * Copyright (c) 2008 - 2013 
  * The Johns Hopkins University.
  * All rights reserved.
+ *
+ * Major Contributor(s):
+ * --------------------
+ *     Jeff Seibert
  *
  */
 
@@ -73,6 +77,8 @@ int main(int argc, char** argv)
   /* Initialize RSA Keys */
   OPENSSL_RSA_Init();
   OPENSSL_RSA_Read_Keys(VAR.My_Server_ID, RSA_SERVER); 
+  TC_Read_Public_Key();
+  TC_Read_Partial_Key(VAR.My_Server_ID, 1);//no multi-site, so just "1"
 
   Alarm(PRINT, "Finished reading keys.\n");
 

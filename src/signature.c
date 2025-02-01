@@ -21,9 +21,13 @@
  * Special thanks to Brian Coan for major contributions to the design of
  * the Prime algorithm. 
  *  	
- * Copyright (c) 2008 - 2010 
+ * Copyright (c) 2008 - 2013 
  * The Johns Hopkins University.
  * All rights reserved.
+ *
+ * Major Contributor(s):
+ * --------------------
+ *     Jeff Seibert
  *
  */
 
@@ -113,6 +117,7 @@ void SIG_Make_Batch(int dummy, void *dummyp)
   SIG_Finish_Pending_Messages(signature);
 }
 
+
 void SIG_Attempt_To_Generate_PO_Messages()
 {
   if(SEND_PO_REQUESTS_PERIODICALLY)
@@ -142,7 +147,6 @@ void SIG_Finish_Pending_Messages(byte *signature)
   UTIL_DLL_Initialize(&original_list);
   UTIL_DLL_Set_Begin(list);
   i = 1;
-  
   while((mess = (signed_message *)UTIL_DLL_Front_Message(list)) != NULL) {
     
     assert(mess);
@@ -169,7 +173,6 @@ void SIG_Finish_Pending_Messages(byte *signature)
 
     UTIL_DLL_Pop_Front(list);
   }
-
   UTIL_DLL_Set_Begin(&original_list);
   while((mess = (signed_message *)UTIL_DLL_Front_Message(&original_list)) 
 	!= NULL) {
@@ -200,15 +203,15 @@ void SIG_Finish_Pending_Messages(byte *signature)
 #else
       /* Send the proof matrix to the leader, send recon messages to only
        * those that need it.  Everything else broadcast. */
-      if(mess->type == PROOF_MATRIX || mess->type == RECON) {
+      if(mess->type == PROOF_MATRIX || mess->type == RECON || mess->type == RTT_PONG || mess->type == RTT_MEASURE) {
 	for(i = 1; i <= NUM_SERVERS; i++) {
 	  if(UTIL_Bitmap_Is_Set(&dest_bits, i))
 	    UTIL_Send_To_Server(mess, i);
 	}
       }
       /* Delay attack: leader only sends Pre-Prepare to server 2 */
-      else if(DELAY_ATTACK && UTIL_I_Am_Leader() && mess->type == PRE_PREPARE)
-	UTIL_Send_To_Server(mess, 2);
+      else if(DELAY_ATTACK && VAR.My_Server_ID == 2 /*&& UTIL_I_Am_Leader()*/ && mess->type == PRE_PREPARE)
+	UTIL_Send_To_Server(mess, 1);
       
       /* Recon attack: Faulty servers don't send to top f correct servers */
       else if (UTIL_I_Am_Faulty() && mess->type == PO_REQUEST) {
@@ -216,9 +219,9 @@ void SIG_Finish_Pending_Messages(byte *signature)
 	  if( (i <= (2*NUM_FAULTS+1)) && (i != VAR.My_Server_ID) )
 	    UTIL_Send_To_Server(mess, i);
 	}
+      } else {
+	  UTIL_Broadcast(mess);
       }
-      else
-	UTIL_Broadcast(mess);
 #endif
     } 
     

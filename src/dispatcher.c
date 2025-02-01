@@ -21,9 +21,13 @@
  * Special thanks to Brian Coan for major contributions to the design of
  * the Prime algorithm. 
  *  	
- * Copyright (c) 2008 - 2010 
+ * Copyright (c) 2008 - 2013 
  * The Johns Hopkins University.
  * All rights reserved.
+ *
+ * Major Contributor(s):
+ * --------------------
+ *     Jeff Seibert
  *
  */
 
@@ -36,11 +40,17 @@
 #include "packets.h"
 #include "pre_order.h"
 #include "order.h"
+#include "suspect_leader.h"
+#include "reliable_broadcast.h"
+#include "view_change.h"
 
 /* Protocol types */
 #define PROT_INVALID       0
 #define PROT_PRE_ORDER     1
 #define PROT_ORDER         2
+#define PROT_SUSPECT	   3
+#define PROT_RELIABLE	   4
+#define PROT_VIEW	   5
 
 int32u DIS_Classify_Message(signed_message *mess);
 
@@ -58,6 +68,18 @@ void DIS_Dispatch_Message(signed_message *mess)
     
   case PROT_ORDER:
     ORDER_Dispatcher(mess);
+    break;
+
+  case PROT_SUSPECT:
+    SUSPECT_Dispatcher(mess);
+    break;
+
+  case PROT_RELIABLE:
+    RELIABLE_Dispatcher(mess);
+    break;
+
+  case PROT_VIEW:
+    VIEW_Dispatcher(mess);
     break;
 
   default:
@@ -84,6 +106,31 @@ int32u DIS_Classify_Message(signed_message *mess)
   case PREPARE:
   case COMMIT:
     return PROT_ORDER;
+
+  case RTT_PING:
+  case RTT_PONG:
+  case RTT_MEASURE:
+  case TAT_MEASURE:
+  case TAT_UB:
+  case NEW_LEADER:
+  case NEW_LEADER_PROOF:
+    return PROT_SUSPECT;
+
+  case RB_INIT:
+  case RB_ECHO:
+  case RB_READY:
+    return PROT_RELIABLE;
+
+  case REPORT:
+  case PC_SET:
+  case VC_LIST:
+  case VC_PARTIAL_SIG:
+  case REPLAY_PREPARE:
+  case REPLAY_COMMIT:
+  case VC_PROOF:
+  case REPLAY:
+    return PROT_VIEW;
+
 
   default:
     Alarm(EXIT, "Unable to classify message type %d!\n", mess->type);

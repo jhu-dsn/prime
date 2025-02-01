@@ -33,10 +33,10 @@ extern "C" {
 #define SIZEOF_CHAR 1
 #define SIZEOF_SHORT 2
 #define SIZEOF_INT 4
-#define SIZEOF_LONG 4
+#define SIZEOF_LONG 8
 #define SIZEOF_LONG_LONG 8
-#define SIZEOF_SIZE_T 4
-#define SIZEOF_VOID_P 4
+#define SIZEOF_SIZE_T 8
+#define SIZEOF_VOID_P 8
 
 /* STDARCH_MAX_BYTE_ALIGNMENT must be a power of 2 (e.g. - 1, 2, 4, 8)
    and must be the most stringent byte alignment that your
@@ -45,7 +45,7 @@ extern "C" {
    for any 64 bit or smaller architectures, etc.
 */
 
-#define STDARCH_MAX_BYTE_ALIGNMENT 4
+#define STDARCH_MAX_BYTE_ALIGNMENT 16
 
 /* check if NULL is all zero in memory for "all" types of pointers */
 

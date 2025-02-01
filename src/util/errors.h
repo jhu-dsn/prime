@@ -46,7 +46,7 @@
  * Copyright (c) 1997 Jonathan Stanton <jonathan@cs.jhu.edu>
  * Defines all Error codes used in spread
  *
- * $Id: errors.h,v 1.1.1.1 2005/10/04 01:14:21 claudiu Exp $
+ * $Id: errors.h,v 1.1.1.1 2012/09/28 19:00:14 mhoque Exp $
  *
  */
 

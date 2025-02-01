@@ -21,9 +21,13 @@
  * Special thanks to Brian Coan for major contributions to the design of
  * the Prime algorithm. 
  *  	
- * Copyright (c) 2008 - 2010 
+ * Copyright (c) 2008 - 2013 
  * The Johns Hopkins University.
  * All rights reserved.
+ *
+ * Major Contributor(s):
+ * --------------------
+ *     Jeff Seibert
  *
  */
 
@@ -34,14 +38,21 @@
 #include "util/sp_events.h"
 #include "def.h"
 #include "openssl_rsa.h"
+#include "tc_wrapper.h"
 #include "util_dll.h"
 
-enum packet_types {DUMMY, 
-		   PO_REQUEST,  PO_ACK,  PO_ARU, PROOF_MATRIX,
-		   PRE_PREPARE, PREPARE, COMMIT, RECON,
-		   UPDATE, CLIENT_RESPONSE};
+//JCS: PO_ARU is PO_SUMMARY and PROOF_MATRIX is SUMMARY_MATRIX in Kirsch's thesis
 
-typedef byte packet_body[PRIME_MAX_PACKET_SIZE];
+enum packet_types {DUMMY, 
+		   PO_REQUEST,  PO_ACK,  PO_ARU, PROOF_MATRIX, 
+		   PRE_PREPARE, PREPARE, COMMIT, RECON,
+		   UPDATE, CLIENT_RESPONSE, RTT_PING, RTT_PONG, RTT_MEASURE,
+		   TAT_MEASURE, TAT_UB, NEW_LEADER, NEW_LEADER_PROOF,
+		   RB_INIT, RB_ECHO, RB_READY,
+		   REPORT, PC_SET, VC_LIST, VC_PARTIAL_SIG, VC_PROOF,
+		   REPLAY, REPLAY_PREPARE, REPLAY_COMMIT, LAST_MESSAGE_TYPE};
+
+//typedef byte packet_body[PRIME_MAX_PACKET_SIZE];
 
 typedef struct dummy_signed_message {
   byte sig[SIGNATURE_SIZE];
@@ -53,9 +64,7 @@ typedef struct dummy_signed_message {
   
   int32u len;        /* length of the content */
   int32u type;       /* type of the message */
-  
-  int32u seq_num;
-
+ 
   /* Content of message follows */
 } signed_message;
 
@@ -149,10 +158,101 @@ typedef struct dummy_complete_pre_prepare_message {
   po_aru_signed_message cum_acks[NUM_SERVERS];
 } complete_pre_prepare_message;
 
+typedef struct dummy_complete_prepare_message {
+  signed_message header;
+  prepare_message body;
+} complete_prepare_message;
+
 typedef struct dummy_client_response_message {
   int32u machine_id;
   int32u seq_num;
 } client_response_message;
+
+typedef struct dummy_rtt_ping {
+  int32u ping_seq_num;
+  int32u view;
+} rtt_ping_message;
+
+typedef struct dummy_rtt_pong {
+  int32u ping_seq_num;
+  int32u view;
+  int32u recipient;
+} rtt_pong_message;
+
+typedef struct dummy_rtt_measure {
+  int32u view;
+  double rtt;
+  int32u recipient;
+} rtt_measure_message;
+
+typedef struct dummy_tat_upper_bound {
+  int32u view;
+  double alpha;
+} tat_upper_bound_message;
+
+typedef struct dummy_tat_measure {
+  int32u view;
+  double max_tat;
+} tat_measure_message;
+
+typedef struct dummy_new_leader {
+  int32u new_view;
+} new_leader_message;
+
+
+typedef struct dummy_new_leader_proof {
+  int32u new_view;
+  //what follows are: 2*NUM_FAULTS+1 signed new_leader_messages 
+} new_leader_proof_message;
+
+
+typedef struct dummy_reliable_broadcast_tag {
+  int32u machine_id;
+  int32u seq_num;
+  int32u view;
+} reliable_broadcast_tag;
+
+typedef struct dummy_report {
+  reliable_broadcast_tag rb_tag; //must be <v, 0> to be accepted
+  int32u execARU;
+  int32u pc_set_size; //numSeq in thesis
+} report_message;
+
+typedef struct dummy_pc_set {
+  reliable_broadcast_tag rb_tag;
+  //what follows is 1 pre-prepare and 2f prepares
+} pc_set_message;
+
+typedef struct dummy_vc_list {
+  int32u view;
+  int32u complete_state;
+} vc_list_message;
+
+typedef struct dummy_vc_partial_sig {
+  int32u view;
+  int32u ids;
+  int32u startSeq;
+  byte thresh_sig[SIGNATURE_SIZE];
+} vc_partial_sig_message;
+
+typedef struct dummy_vc_proof {
+  int32u view;
+  int32u ids;
+  int32u startSeq;
+  byte thresh_sig[SIGNATURE_SIZE];
+} vc_proof_message;
+
+typedef struct dummy_replay {
+  vc_proof_message proof;
+} replay_message;
+
+typedef struct dummy_replay_prepare {
+} replay_prepare_message;
+
+typedef struct dummy_replay_commit {
+} replay_commit_message;
+
+
 
 typedef struct dummy_erasure_part {
 
@@ -177,6 +277,7 @@ typedef struct dummy_prepare_certificate {
   signed_message* prepare[NUM_SERVER_SLOTS]; 
 } prepare_certificate_struct;
 
+
 /* A Commit certificate consists of 2f+1 Commits */
 typedef struct dummy_commit_certificate {
     //byte update_digest[DIGEST_SIZE];    /* The update digest */
@@ -194,6 +295,29 @@ signed_message* ORDER_Construct_Prepare(complete_pre_prepare_message *pp);
 signed_message* ORDER_Construct_Commit (complete_pre_prepare_message *pp);
 signed_message* ORDER_Construct_Client_Response(int32u client_id, 
 						int32u seq_num);
+
+signed_message* SUSPECT_Construct_RTT_Ping(void);
+signed_message* SUSPECT_Construct_RTT_Pong(int32u server_id, int32u seq_num);
+signed_message* SUSPECT_Construct_RTT_Measure(int32u server_id, double rtt);
+signed_message* SUSPECT_Construct_TAT_Measure(double max_tat);
+signed_message* SUSPECT_Construct_TAT_UB(double alpha);
+signed_message* SUSPECT_Construct_New_Leader(void);
+signed_message* SUSPECT_Construct_New_Leader_Proof(void);
+
+signed_message* RELIABLE_Construct_RB_Init(signed_message *mess);
+signed_message* RELIABLE_Construct_RB_Echo(signed_message *mess);
+signed_message* RELIABLE_Construct_RB_Ready(signed_message *mess);
+
+
+signed_message* VIEW_Construct_Report(void);
+signed_message* VIEW_Construct_PC_Set(char *cert, int size);
+signed_message* VIEW_Construct_VC_List(void);
+signed_message* VIEW_Construct_VC_Partial_Sig(int32u ids);
+signed_message* VIEW_Construct_VC_Proof(int32u view, int32u ids, int32u startSeq, byte *sig);
+signed_message* VIEW_Construct_Replay(vc_proof_message *proof);
+signed_message* VIEW_Construct_Replay_Prepare(void);
+signed_message* VIEW_Construct_Replay_Commit(void);
+
 
 signed_message *RECON_Construct_Recon_Erasure_Message(dll_struct *list,
 							int32u *more_to_encode);

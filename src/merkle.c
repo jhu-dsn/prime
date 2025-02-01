@@ -21,9 +21,13 @@
  * Special thanks to Brian Coan for major contributions to the design of
  * the Prime algorithm. 
  *  	
- * Copyright (c) 2008 - 2010 
+ * Copyright (c) 2008 - 2013 
  * The Johns Hopkins University.
  * All rights reserved.
+ *
+ * Major Contributor(s):
+ * --------------------
+ *     Jeff Seibert
  *
  */
 
@@ -58,7 +62,7 @@ int32 MT_Digests_( int32 n )
   if ( n <= 32 ) return 5;
   if ( n <= 64 ) return 6;
   if ( n <= 128) return 7; 
-  if ( n <= 256) return 8; 
+  if ( n <= 256) return 8;
 
   Alarm(EXIT, "Probable bug: Should probably never happen? %d\n", n);
   return -1;
@@ -207,7 +211,7 @@ int32 MT_Verify( signed_message *mess )
 {
   byte digest[DIGEST_SIZE];
   /*byte *mtopt;*/
-  byte *proot;
+  byte *proot = NULL;
   int32 ret;
   byte *digests;
   
@@ -248,8 +252,8 @@ int32 MT_Verify( signed_message *mess )
     Alarm(PRINT,"MT Verify bad RSA Sig n=%d mtn=%d type=%d sid=%d di=%d\n",
 	  mess->mt_index, mess->mt_num, mess->type, mess->site_id, 
 	  MT_Digests_(mess->mt_num));
-    //Alarm(PRINT,"YY->"); OPENSSL_RSA_Print_Digest(proot);
-    //OPENSSL_RSA_Print_Digest(digest); 
+    Alarm(PRINT,"YY->"); OPENSSL_RSA_Print_Digest(proot);
+    OPENSSL_RSA_Print_Digest(digest); 
   }
   
   return ret; 

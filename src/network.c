@@ -21,9 +21,13 @@
  * Special thanks to Brian Coan for major contributions to the design of
  * the Prime algorithm. 
  *  	
- * Copyright (c) 2008 - 2010 
+ * Copyright (c) 2008 - 2013 
  * The Johns Hopkins University.
  * All rights reserved.
+ *
+ * Major Contributor(s):
+ * --------------------
+ *     Jeff Seibert
  *
  */
 
@@ -363,6 +367,7 @@ void Initialize_Spines()
   channel spines_recv_sk = -1;
   struct sockaddr_in spines_addr, my_addr;
   int ret, priority;
+  int16u protocol;
 
   memset(&spines_addr, 0, sizeof(spines_addr));  
   memset(&my_addr, 0, sizeof(my_addr));  
@@ -376,8 +381,18 @@ void Initialize_Spines()
 	IP(ntohl(spines_addr.sin_addr.s_addr)));
   
   /* Connect to spines */
-  spines_recv_sk = spines_socket(PF_SPINES, SOCK_DGRAM, 0, 
-				 (struct sockaddr *)&spines_addr);
+  // x | (y << 8)
+  // x = {0,1,2,3,4,5,6,7,8}
+  //   - 0 best effort
+  //   - 1 reliable
+  //   - 8 intrusion tolerant
+  // y = {0,1,2}
+  //   - shortest path routing
+  //   - priority flooding
+  //   - reliable flooding 
+  protocol = 8 | (2 << 8);
+  spines_recv_sk = spines_socket(PF_SPINES, SOCK_DGRAM, protocol, 
+                 (struct sockaddr *)&spines_addr);
 
   if(spines_recv_sk == -1) {
     Alarm(PRINT, "%d Could not connect to Spines daemon.\n", VAR.My_Server_ID );
@@ -464,14 +479,11 @@ void Net_Srv_Recv(channel sk, int source, void *dummy_p)
     Alarm(PRINT, "VALIDATE FAILED for type %d\n", mess->type);
     return;
   }
-
   /* No Conflict, Apply the message to our data structures. */
   APPLY_Message_To_Data_Structs(mess);
-    
   /* Now dispatch the mesage so that is will be processed by the
    * appropriate protocol */
   DIS_Dispatch_Message(mess);
-  
   /* The following checks to see if the packet has been stored and, if so, it
    * allocates a new packet for the next incoming message. */
   if(get_ref_cnt(srv_recv_scat.elements[0].buf) > 1) {

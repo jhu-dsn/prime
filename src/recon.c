@@ -21,9 +21,13 @@
  * Special thanks to Brian Coan for major contributions to the design of
  * the Prime algorithm. 
  *  	
- * Copyright (c) 2008 - 2010 
+ * Copyright (c) 2008 - 2013 
  * The Johns Hopkins University.
  * All rights reserved.
+ *
+ * Major Contributor(s):
+ * --------------------
+ *     Jeff Seibert
  *
  */
 
@@ -175,7 +179,7 @@ void RECON_Do_Recon (ord_slot *o_slot)
 	       DATA.PO.Recon_Max_Sent[k][i] < rs->seq_num) {	      
 
 	      if(rs->seq_num % 1 == 0 && !UTIL_I_Am_Faulty())
-		Alarm(PRINT,"RECON: Server %d found %d needs (%d, %d) "
+		Alarm(DEBUG,"RECON: Server %d found %d needs (%d, %d) "
 		      "and will send\n", VAR.My_Server_ID, k, i, j); 
 	      Alarm(DEBUG, "LastPOARU[%d][%d] = %d, rs->seq_num = %d\n",
 		    k, req->machine_id, 

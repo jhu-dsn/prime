@@ -21,9 +21,13 @@
  * Special thanks to Brian Coan for major contributions to the design of
  * the Prime algorithm. 
  *  	
- * Copyright (c) 2008 - 2010 
+ * Copyright (c) 2008 - 2013 
  * The Johns Hopkins University.
  * All rights reserved.
+ *
+ * Major Contributor(s):
+ * --------------------
+ *     Jeff Seibert
  *
  */
 
@@ -81,6 +85,19 @@ int intcmp(const void *n1, const void *n2)
   return 0;
 }
 
+int doublecmp(const void *n1, const void *n2)
+{
+  double v1;
+  double v2;
+
+  v1 = *((double*)n1);
+  v2 = *((double*)n2);
+
+  if ( v1 < v2 ) return -1;
+  if ( v1 > v2 ) return 1;
+  return 0;
+}
+
 int32u UTIL_Message_Size(signed_message *m)
 {
   return (sizeof(signed_message) + m->len + 
@@ -112,6 +129,34 @@ int32u UTIL_Get_Timeliness(int32u type)
   case PROOF_MATRIX:
     ret = TIMELY_TRAFFIC_CLASS;
     break;
+
+  case RTT_PING:
+    ret = TIMELY_TRAFFIC_CLASS;
+    break;
+
+  case RTT_PONG:
+    ret = TIMELY_TRAFFIC_CLASS;
+    break;
+
+  case RTT_MEASURE:
+    ret = BOUNDED_TRAFFIC_CLASS;
+    break;
+
+  case TAT_UB:
+    ret = BOUNDED_TRAFFIC_CLASS;
+    break;
+
+  case TAT_MEASURE:
+    ret = BOUNDED_TRAFFIC_CLASS;
+    break;
+
+  case NEW_LEADER:
+    ret = BOUNDED_TRAFFIC_CLASS;
+    break;
+
+  case NEW_LEADER_PROOF:
+    ret = BOUNDED_TRAFFIC_CLASS;
+    break;
     
   case PRE_PREPARE:
     ret = TIMELY_TRAFFIC_CLASS;
@@ -124,7 +169,51 @@ int32u UTIL_Get_Timeliness(int32u type)
   case COMMIT:
     ret = TIMELY_TRAFFIC_CLASS;
     break;
-    
+
+  case REPORT:  
+    ret = BOUNDED_TRAFFIC_CLASS;
+    break;
+
+  case RB_INIT:
+    ret = BOUNDED_TRAFFIC_CLASS;
+    break;
+
+  case RB_ECHO:
+    ret = BOUNDED_TRAFFIC_CLASS;
+    break;
+
+  case RB_READY:
+    ret = BOUNDED_TRAFFIC_CLASS;
+    break;
+
+  case PC_SET:  
+    ret = BOUNDED_TRAFFIC_CLASS;
+    break;
+
+  case VC_LIST:  
+    ret = BOUNDED_TRAFFIC_CLASS;
+    break;
+
+  case VC_PARTIAL_SIG:  
+    ret = BOUNDED_TRAFFIC_CLASS;
+    break;
+
+  case REPLAY_PREPARE:  
+    ret = BOUNDED_TRAFFIC_CLASS;
+    break;
+
+  case REPLAY_COMMIT:  
+    ret = BOUNDED_TRAFFIC_CLASS;
+    break;
+
+  case VC_PROOF:  
+    ret = TIMELY_TRAFFIC_CLASS;
+    break;
+
+  case REPLAY:  
+    ret = TIMELY_TRAFFIC_CLASS;
+    break;
+
   default:
     Alarm(PRINT, "Assigning unknown message type %d as BOUNDED\n", type);
     ret = BOUNDED_TRAFFIC_CLASS;
@@ -184,6 +273,78 @@ char *UTIL_Type_To_String(int32u type)
 
   case COMMIT:
     ret = "COMMIT";
+    break;
+
+  case RTT_PING:
+    ret = "RTT_PING";
+    break;
+    
+  case RTT_PONG:
+    ret = "RTT_PONG";
+    break;
+    
+  case RTT_MEASURE:
+    ret = "RTT_MEASURE";
+    break;
+
+  case TAT_MEASURE:
+    ret = "TAT_MEASURE";
+    break;
+
+  case TAT_UB:
+    ret = "TAT_UB";
+    break;
+
+  case NEW_LEADER:
+    ret = "NEW_LEADER";
+    break;
+
+  case NEW_LEADER_PROOF:
+    ret = "NEW_LEADER_PROOF";
+    break;
+
+  case RB_INIT:
+    ret = "RB_INIT";
+    break;
+
+  case RB_ECHO:
+    ret = "RB_ECHO";
+    break;
+
+  case RB_READY:
+    ret = "RB_READY";
+    break;
+
+  case REPORT:
+    ret = "REPORT";
+    break;
+
+  case PC_SET:
+    ret = "PC_SET";
+    break;
+
+  case VC_LIST:
+    ret = "VC_LIST";
+    break;
+
+  case VC_PARTIAL_SIG:
+    ret = "VC_PARTIAL_SIG";
+    break;
+
+  case VC_PROOF:
+    ret = "VC_PROOF";
+    break;
+
+  case REPLAY:
+    ret = "REPLAY";
+    break;
+
+  case REPLAY_PREPARE:
+    ret = "REPLAY_PREPARE";
+    break;
+
+  case REPLAY_COMMIT:
+    ret = "REPLAY_COMMIT";
     break;
 
   case RECON:
@@ -380,7 +541,9 @@ void UTIL_Broadcast( signed_message *mess )
   
   /* All messages might have some digest bytes hanging on */
   scat.elements[0].len += (MT_Digests_(mess->mt_num) * DIGEST_SIZE);
-  
+  if (scat.elements[0].len > PRIME_MAX_PACKET_SIZE) {
+    Alarm(PRINT, "size of packet %d\n", scat.elements[0].len); 
+  }
   assert(scat.elements[0].len <= PRIME_MAX_PACKET_SIZE);
 
   /* Cases:

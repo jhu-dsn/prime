@@ -21,9 +21,13 @@
  * Special thanks to Brian Coan for major contributions to the design of
  * the Prime algorithm. 
  *  	
- * Copyright (c) 2008 - 2010 
+ * Copyright (c) 2008 - 2013 
  * The Johns Hopkins University.
  * All rights reserved.
+ *
+ * Major Contributor(s):
+ * --------------------
+ *     Jeff Seibert
  *
  */
 
@@ -36,6 +40,10 @@
 
 #include <stdio.h>
 #include "util/arch.h"
+
+/* This flag is used to remove crypto for testing -- this feature eliminates
+ * security and Byzantine fault tolerance. */
+#define REMOVE_CRYPTO 0
 
 /* Public definitions */
 #define DIGEST_SIZE        20

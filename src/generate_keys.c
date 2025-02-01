@@ -21,20 +21,25 @@
  * Special thanks to Brian Coan for major contributions to the design of
  * the Prime algorithm. 
  *  	
- * Copyright (c) 2008 - 2010 
+ * Copyright (c) 2008 - 2013 
  * The Johns Hopkins University.
  * All rights reserved.
+ *
+ * Major Contributor(s):
+ * --------------------
+ *     Jeff Seibert
  *
  */
 
 #include <stdio.h>
 #include "openssl_rsa.h"
+#include "tc_wrapper.h"
 
 int main(int argc, char **args) 
 {
   printf("Generating key files and writing them to ./keys directory.\n");
   
   OPENSSL_RSA_Generate_Keys();
-
+  TC_Generate();
   return 0;
 }

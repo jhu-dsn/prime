@@ -21,9 +21,13 @@
  * Special thanks to Brian Coan for major contributions to the design of
  * the Prime algorithm. 
  *  	
- * Copyright (c) 2008 - 2010 
+ * Copyright (c) 2008 - 2013 
  * The Johns Hopkins University.
  * All rights reserved.
+ *
+ * Major Contributor(s):
+ * --------------------
+ *     Jeff Seibert
  *
  */
 
@@ -45,6 +49,8 @@
 #include "signature.h"
 #include "erasure.h"
 #include "recon.h"
+#include "suspect_leader.h"
+#include "view_change.h"
 
 /* Global variables */
 extern server_variables   VAR;
@@ -56,7 +62,6 @@ extern benchmark_struct   BENCH;
 void   ORDER_Upon_Receiving_Pre_Prepare  (signed_message *mess);
 void   ORDER_Upon_Receiving_Prepare      (signed_message *mess);
 void   ORDER_Upon_Receiving_Commit       (signed_message *mess);
-void   ORDER_Periodically                (int dummy, void *dummyp);
 void   ORDER_Execute_Update              (signed_message *mess);
 void   ORDER_Flood_Pre_Prepare           (signed_message *mess);
 void   ORDER_Update_Forwarding_White_Line(void);
@@ -98,6 +103,11 @@ void ORDER_Initialize_Data_Structure()
   DATA.ORD.events_ordered         = 0;
   DATA.ORD.seq                    = 1;
 
+  int i = 0;
+  for (i = 1; i <= NUM_SERVERS; ++i) {
+	DATA.ORD.server_aru[i] = 0;
+  }
+
   stdhash_construct(&DATA.ORD.History, sizeof(int32u), 
 		    sizeof(ord_slot *), NULL, NULL, 0);
   
@@ -113,14 +123,16 @@ void ORDER_Initialize_Data_Structure()
     ORDER_Periodically(0, NULL);
 }
 
+
 void ORDER_Periodically(int dummy, void *dummyp)
 {
   sp_time t;
-
-  ORDER_Send_One_Pre_Prepare(TIMEOUT_CALLER);
-  t.sec  = PRE_PREPARE_SEC; 
-  t.usec = PRE_PREPARE_USEC;
-  E_queue(ORDER_Periodically, 0, NULL, t);
+  if (UTIL_I_Am_Leader()) {
+      ORDER_Send_One_Pre_Prepare(TIMEOUT_CALLER);
+      t.sec  = PRE_PREPARE_SEC; 
+      t.usec = PRE_PREPARE_USEC;
+      E_queue(ORDER_Periodically, 0, NULL, t);
+  }
 }
 
 int32u ORDER_Send_One_Pre_Prepare(int32u caller)
@@ -128,24 +140,26 @@ int32u ORDER_Send_One_Pre_Prepare(int32u caller)
   signed_message *mset[NUM_SERVERS];
   int32u num_parts, i;
   double time;
-
+  //Alarm(PRINT, "Sending pre-prepare...\n");
   /* Make sure enough time has elapsed since we've sent a Pre-Prepare */
   UTIL_Stopwatch_Stop(&DATA.ORD.pre_prepare_sw);
   time = UTIL_Stopwatch_Elapsed(&DATA.ORD.pre_prepare_sw);
   if(time < (PRE_PREPARE_USEC / 1000000.0))
     return 0;
+  //Alarm(PRINT, "Enough time has elapsed\n");
 
 #if DELAY_ATTACK
-  while(!UTIL_DLL_Is_Empty(&DATA.PO.proof_matrix_dll) &&
-	UTIL_DLL_Elapsed_Front(&DATA.PO.proof_matrix_dll) > DELAY_TARGET) {
-    APPLY_Proof_Matrix(UTIL_DLL_Front_Message(&DATA.PO.proof_matrix_dll));
-    UTIL_DLL_Pop_Front(&DATA.PO.proof_matrix_dll);
+  if (VAR.My_Server_ID == 2/* && UTIL_I_Am_Leader()*/) {
+      while(!UTIL_DLL_Is_Empty(&DATA.PO.proof_matrix_dll) &&
+	      UTIL_DLL_Elapsed_Front(&DATA.PO.proof_matrix_dll) > DELAY_TARGET) {
+	  APPLY_Proof_Matrix(UTIL_DLL_Front_Message(&DATA.PO.proof_matrix_dll));
+	  UTIL_DLL_Pop_Front(&DATA.PO.proof_matrix_dll);
+      }
   }
 #endif
 
   if(PRE_ORDER_Latest_Proof_Sent())
     return 0;
-  
   /* Construct the Pre-Prepare */
   ORDER_Construct_Pre_Prepare(mset, &num_parts);
     
@@ -159,90 +173,122 @@ int32u ORDER_Send_One_Pre_Prepare(int32u caller)
   }
 
   UTIL_Stopwatch_Start(&DATA.ORD.pre_prepare_sw);
-
+    
   return 1;
 }
 
 void ORDER_Upon_Receiving_Pre_Prepare(signed_message *mess)
 {
-  signed_message *prepare;
-  ord_slot *slot;
-  pre_prepare_message *pp_specific;
-  complete_pre_prepare_message *complete_pp;
-  po_aru_signed_message *cum_acks;
-  int32u part_num;
-  int32u i;
+    signed_message *prepare;
+    ord_slot *slot;
+    pre_prepare_message *pp_specific;
+    complete_pre_prepare_message *complete_pp;
+    po_aru_signed_message *cum_acks;
+    int32u part_num;
+    int32u i;
 
-  Alarm(DEBUG,"%d Received Pre-Prepare\n", VAR.My_Server_ID);
+    pp_specific = (pre_prepare_message *)(mess+1);
+    part_num    = pp_specific->part_num;
 
-  pp_specific = (pre_prepare_message *)(mess+1);
-  part_num    = pp_specific->part_num;
-  
-  /* If we're done forwarding for this slot, and we've already reconciled
-   * on this slot and the next, and we've already executed this slot and
-   * the next one, then there's no reason to do anything else with this
-   * sequence number. */
-  if(pp_specific->seq_num <= DATA.ORD.forwarding_white_line &&
-     (pp_specific->seq_num+1) <= DATA.ORD.recon_white_line &&
-     (pp_specific->seq_num+1) <= DATA.ORD.ARU)
-    return;
+    Alarm(DEBUG,"%d Received Pre-Prepare seq_num %d\n", VAR.My_Server_ID, pp_specific->seq_num);
 
-  slot = UTIL_Get_ORD_Slot(pp_specific->seq_num);
-  
-  /* If we already flooded this part of the PP, don't do it
-   * again. Otherwise, flood it if I'm not the leader. */
-  if (slot->forwarded_pre_prepare_parts[part_num])
-    Alarm(DEBUG, "Not re-forwarding PP part %d\n", part_num);
-  else if(!UTIL_I_Am_Leader())
-    ORDER_Flood_Pre_Prepare(mess);
+    /* If we're done forwarding for this slot, and we've already reconciled
+     * on this slot and the next, and we've already executed this slot and
+     * the next one, then there's no reason to do anything else with this
+     * sequence number. */
+    if(pp_specific->seq_num <= DATA.ORD.forwarding_white_line &&
+	    (pp_specific->seq_num+1) <= DATA.ORD.recon_white_line &&
+	    (pp_specific->seq_num+1) <= DATA.ORD.ARU)
+	return;
 
-  /* If we now have the complete Pre-Prepare for the first time, do the 
-   * following:
-   * 
-   *  1. If I'm a non-leader, send a Prepare.
-   *
-   *  2. Apply the PO-ARUs in the Proof Matrix.
-   *
-   *  3. Perform reconciliation on this slot.  Also try to perform it on
-   *     the next slot, because that slot might not have been able to 
-   *     reconcile if we received PP i+1 before PP i. */
-  if(slot->should_handle_complete_pre_prepare) {
+    slot = UTIL_Get_ORD_Slot(pp_specific->seq_num);
 
-    slot->should_handle_complete_pre_prepare = 0;
+    /* If we already flooded this part of the PP, don't do it
+     * again. Otherwise, flood it if I'm not the leader. */
+    if (slot->forwarded_pre_prepare_parts[part_num])
+	Alarm(DEBUG, "Not re-forwarding PP part %d\n", part_num);
+    else if(!UTIL_I_Am_Leader())
+	ORDER_Flood_Pre_Prepare(mess);
 
-    /* Non-leaders should send a Prepare */
-    if(!UTIL_I_Am_Leader()) {
+    /* If we now have the complete Pre-Prepare for the first time, do the 
+     * following:
+     * 
+     *  1. If I'm a non-leader, send a Prepare.
+     *
+     *  2. Apply the PO-ARUs in the Proof Matrix.
+     *
+     *  3. Perform reconciliation on this slot.  Also try to perform it on
+     *     the next slot, because that slot might not have been able to 
+     *     reconcile if we received PP i+1 before PP i. */
+    if(slot->should_handle_complete_pre_prepare) {
+	slot->pre_prepare = mess;
+	inc_ref_cnt(mess);
 
-      /* Construct a Prepare Message based on the Pre-Prepare */
-      prepare = ORDER_Construct_Prepare(&slot->complete_pre_prepare);
+	slot->should_handle_complete_pre_prepare = 0;
 
-      Alarm(DEBUG, "Add: Prepare\n");
-      SIG_Add_To_Pending_Messages(prepare, BROADCAST, 
-				  UTIL_Get_Timeliness(PREPARE));
-      dec_ref_cnt(prepare);
+	/* Non-leaders should send a Prepare */
+	if(!UTIL_I_Am_Leader()) {
+
+	    /* Construct a Prepare Message based on the Pre-Prepare */
+	    prepare = ORDER_Construct_Prepare(&slot->complete_pre_prepare);
+
+	    Alarm(DEBUG, "Add: Prepare\n");
+	    SIG_Add_To_Pending_Messages(prepare, BROADCAST, 
+		    UTIL_Get_Timeliness(PREPARE));
+	    dec_ref_cnt(prepare);
+	}
+
+	/* Apply the PO-ARUs contained in the proof matrix */
+	complete_pp = (complete_pre_prepare_message *)&slot->complete_pre_prepare;
+	cum_acks = (po_aru_signed_message *)complete_pp->cum_acks;
+
+	int32u covers = 1;
+	int32u prev_num;
+	po_aru_signed_message *prev, *cur;
+	int32u num;
+
+	for(i = 0; i < NUM_SERVERS; i++) {
+	    signed_message *po_aru = (signed_message *)&cum_acks[i];
+
+	    /* Some of the rows in the proof matrix might be null vectors, so 
+	     * only apply if it is really a PO_ARU message. */
+	    if(po_aru->type == PO_ARU) {
+		APPLY_Message_To_Data_Structs(po_aru);
+	    } else {
+		covers = 0;
+		continue;
+	    }
+
+	    prev = &(DATA.PO.cum_acks[po_aru->machine_id]);
+
+	    num      = ((po_aru_message*)(po_aru+1))->num;
+	    prev_num = prev->cum_ack.num;
+	    if (num < prev_num) {
+		covers = 0;
+	    }
+	    cur = (po_aru_signed_message *)po_aru;
+	    for(i = 1; i <= NUM_SERVERS; i++) {
+		num = cur->cum_ack.ack_for_server[i-1];
+
+		if(DATA.PO.cum_max_acked[po_aru->machine_id][i] > num) {
+		    covers = 0;
+		}
+	    }
+
+	}
+
+	if (covers && pp_specific->seq_num == DATA.ORD.ARU + 1) {
+	    SUSPECT_Stop_Measure_TAT();
+	} 
+
+	/* Try to reconcile on the current slot, then try to reconcile on the
+	 * next one in case it was waiting for a Pre-Prepare to fill the hole. */
+	RECON_Do_Recon(slot);
+
+	slot = UTIL_Get_ORD_Slot_If_Exists(pp_specific->seq_num + 1);
+	if(slot != NULL)
+	    RECON_Do_Recon(slot);
     }
-
-    /* Apply the PO-ARUs contained in the proof matrix */
-    complete_pp = (complete_pre_prepare_message *)&slot->complete_pre_prepare;
-    cum_acks = (po_aru_signed_message *)complete_pp->cum_acks;
-
-    for(i = 0; i < NUM_SERVERS; i++) {
-      signed_message *m = (signed_message *)&cum_acks[i];
-
-      /* Some of the rows in the proof matrix might be null vectors, so 
-       * only apply if it is really a PO_ARU message. */
-      if(m->type == PO_ARU)
-	APPLY_Message_To_Data_Structs(m);
-    }
-
-    /* Try to reconcile on the current slot, then try to reconcile on the
-     * next one in case it was waiting for a Pre-Prepare to fill the hole. */
-    RECON_Do_Recon(slot);
-      
-    slot = UTIL_Get_ORD_Slot_If_Exists(pp_specific->seq_num + 1);
-    if(slot != NULL)
-      RECON_Do_Recon(slot);
-  }
 }
 
 void ORDER_Upon_Receiving_Prepare(signed_message *mess) 
@@ -303,7 +349,7 @@ void ORDER_Upon_Receiving_Commit(signed_message *mess)
   
   /* Execute the commit certificate  only the first time that we get it */
   if(slot->execute_commit) {
-    slot->execute_commit = 0;
+    Alarm(PRINT, "receiving commit execute commit seq %d\n", slot->seq_num);
     ORDER_Execute_Commit(slot);
   }
 }
@@ -315,7 +361,7 @@ int32u ORDER_Ready_To_Execute(ord_slot *o_slot)
   ord_slot *prev_ord_slot;
   po_slot *p_slot;
   int32u gseq, i, j;
-  int32u prev_pop[NUM_SERVER_SLOTS];
+  //int32u prev_pop[NUM_SERVER_SLOTS];
   int32u cur_pop[NUM_SERVER_SLOTS];
   stdit it;
 
@@ -325,6 +371,11 @@ int32u ORDER_Ready_To_Execute(ord_slot *o_slot)
     pp = &o_slot->complete_pre_prepare;
   
   gseq = pp->seq_num;
+
+  if (DATA.preinstall && DATA.VIEW.executeTo < gseq) {
+      Alarm(PRINT, "Can't yet execute because preinstalled view, but slot beyond the execTo\n");
+      return 0;
+  }
 
   /* First check to see if we've globally executed the previous
    * sequence number. */
@@ -336,14 +387,14 @@ int32u ORDER_Ready_To_Execute(ord_slot *o_slot)
 
     /* We can't execute this global slot yet because we have not yet
      * executed the previous global slot.  Put it on hold. */
-    Alarm(DEBUG, "Ordered slot %d but my aru is %d!\n", gseq, DATA.ORD.ARU);
+    Alarm(PRINT, "Ordered slot %d but my aru is %d!\n", gseq, DATA.ORD.ARU);
     UTIL_Mark_ORD_Slot_As_Pending(gseq, o_slot);
     return 0;
   }
 
   /* If we already know there are po-requests missing, we can't execute */
   if(o_slot->num_remaining_for_execution > 0) {
-    Alarm(DEBUG, "%d requests missing for gseq %d\n", 
+    Alarm(PRINT, "%d requests missing for gseq %d\n", 
 	  o_slot->num_remaining_for_execution, gseq);
     UTIL_Mark_ORD_Slot_As_Pending(gseq, o_slot);
     return 0;
@@ -353,8 +404,10 @@ int32u ORDER_Ready_To_Execute(ord_slot *o_slot)
   if(prev_ord_slot == NULL) {
     assert(gseq == 1);
 
+    /*
     for(i = 1; i <= NUM_SERVERS; i++)
       prev_pop[i] = 0;
+      */
   }
   else {
     if(prev_ord_slot->prepare_certificate_ready)
@@ -365,23 +418,26 @@ int32u ORDER_Ready_To_Execute(ord_slot *o_slot)
     }
 
     /* Set up the Prev_pop array */
+    /*
     for(i = 1; i <= NUM_SERVERS; i++)
       prev_pop[i] = PRE_ORDER_Proof_ARU(i, prev_pp->cum_acks);
+      */
   }
 
   for(i = 1; i <= NUM_SERVERS; i++)
     cur_pop[i] = PRE_ORDER_Proof_ARU(i, pp->cum_acks);
 
   for(i = 1; i <= NUM_SERVERS; i++) {
-    for(j = prev_pop[i] + 1; j <= cur_pop[i]; j++) {
+    //Alarm(DEBUG, "check server_aru[%d] %d cur %d\n", i, DATA.ORD.server_aru[i], cur_pop[i]);
+    for(j = DATA.ORD.server_aru[i] + 1; j <= cur_pop[i]; j++) {
 
       p_slot = UTIL_Get_PO_Slot_If_Exists(i, j);
 
       if(p_slot == NULL || p_slot->po_request == NULL) {
-        Alarm(DEBUG, "Seq %d not ready, missing: %d %d\n", gseq, i, j);
+        Alarm(PRINT, "Seq %d not ready, missing: %d %d\n", gseq, i, j);
 
         o_slot->num_remaining_for_execution++;
-        Alarm(DEBUG, "Setting ord_slots num_remaining to %d\n",
+        Alarm(PRINT, "Setting ord_slots num_remaining to %d\n",
               o_slot->num_remaining_for_execution);
 
         /* Insert a pointer to (i, j) into the map */
@@ -393,7 +449,7 @@ int32u ORDER_Ready_To_Execute(ord_slot *o_slot)
 
   /* If any PO-Request was missing, the slot is not ready to be executed. */
   if(o_slot->num_remaining_for_execution > 0) {
-    Alarm(DEBUG, "Not executing global seq %d, waiting for %d requests\n",
+    Alarm(PRINT, "Not executing global seq %d, waiting for %d requests\n",
           gseq, o_slot->num_remaining_for_execution);
     UTIL_Mark_ORD_Slot_As_Pending(gseq, o_slot);
     return 0;
@@ -409,7 +465,7 @@ void ORDER_Execute_Commit(ord_slot *o_slot)
   po_request_message *po_request_specific;
   ord_slot *prev_ord_slot;
   po_slot *p_slot;
-  int32u prev_pop[NUM_SERVER_SLOTS];
+  //int32u prev_pop[NUM_SERVER_SLOTS];
   int32u cur_pop[NUM_SERVER_SLOTS];
   int32u gseq, i, j, k, num_events;
   signed_message *event;
@@ -428,11 +484,12 @@ void ORDER_Execute_Commit(ord_slot *o_slot)
   gseq = pp->seq_num;
 
   if(!ORDER_Ready_To_Execute(o_slot)) {
-    Alarm(DEBUG, "Not yet ready to execute seq %d\n", gseq);
+    Alarm(PRINT, "Not yet ready to execute seq %d\n", gseq);
     return;
   }
-
-  Alarm(DEBUG, "Executing Commit for Ord seq %d!\n", gseq);
+  o_slot->execute_commit = 0;
+  //Alarm(DEBUG, "Executing Commit for Ord seq %d!\n", gseq);
+  Alarm(PRINT, "Executing Commit for Ord seq %d!\n", gseq);
 
   /* Get the previous ord_slot if it exists. If it doesn't exist,
    * then this better be the first sequence number! */
@@ -440,10 +497,12 @@ void ORDER_Execute_Commit(ord_slot *o_slot)
 
   if(prev_ord_slot == NULL) {
     assert(gseq == 1);
-    
+   
+    /*
     Alarm(DEBUG, "Gseq was 1, setting all in prev_pop to 0\n");
     for(i = 1; i <= NUM_SERVERS; i++)
       prev_pop[i] = 0;
+      */
   }
   else {
     assert(prev_ord_slot->executed);
@@ -452,10 +511,13 @@ void ORDER_Execute_Commit(ord_slot *o_slot)
       prev_pp = &(prev_ord_slot->prepare_certificate.pre_prepare);
     else
       prev_pp = &prev_ord_slot->complete_pre_prepare;
-    
+   
+
     /* Set up the Prev_pop array */
+    /*
     for(i = 1; i <= NUM_SERVERS; i++)
       prev_pop[i] = PRE_ORDER_Proof_ARU(i, prev_pp->cum_acks);
+      */
   }
   
   for(i = 1; i <= NUM_SERVERS; i++)
@@ -483,10 +545,11 @@ void ORDER_Execute_Commit(ord_slot *o_slot)
   o_slot->executed = 1;
   assert(gseq == (DATA.ORD.ARU + 1));
   DATA.ORD.ARU++;
+  //Alarm(PRINT, "Executed %d\n", DATA.ORD.ARU);
 
   for(i = 1; i <= NUM_SERVERS; i++) {
-    for(j = prev_pop[i] + 1; j <= cur_pop[i]; j++) {
-      
+      Alarm(DEBUG, "executing server %d %d to %d\n", i, DATA.ORD.server_aru[i], cur_pop[i]); 
+    for(j = DATA.ORD.server_aru[i] + 1; j <= cur_pop[i]; j++) {
       p_slot = UTIL_Get_PO_Slot_If_Exists(i, j);
       assert(p_slot);
 
@@ -514,11 +577,13 @@ void ORDER_Execute_Commit(ord_slot *o_slot)
 	wa_bytes = 0;
 	p += event->len + sizeof(signed_message) + wa_bytes;
       }
+      
 
       /* We've executed all of the events in pre-order slot, so clean
        * it up. */
       PRE_ORDER_Garbage_Collect_PO_Slot(i, j);
     }
+    DATA.ORD.server_aru[i] = cur_pop[i];
   }
 
   /* Garbage collect seq-1 when I commit seq */
@@ -528,6 +593,11 @@ void ORDER_Execute_Commit(ord_slot *o_slot)
   //t.usec = 1000;
   //E_queue(ORDER_Attempt_To_Execute_Pending_Local_Commits, 0, 0, t);
   ORDER_Attempt_To_Execute_Pending_Commits(0, 0);
+
+  //callback to view change
+  if (DATA.preinstall == 1) {
+     VIEW_Check_Complete_State();
+  }
 }
 
 void ORDER_Attempt_To_Execute_Pending_Commits(int dummy, void *dummyp)
@@ -539,13 +609,14 @@ void ORDER_Attempt_To_Execute_Pending_Commits(int dummy, void *dummyp)
   i = DATA.ORD.ARU+1;
 
   stdhash_find(&DATA.ORD.Pending_Execution, &it, &i);
-
   if(!stdhash_is_end(&DATA.ORD.Pending_Execution, &it)) {
     slot = *((ord_slot **)stdhash_it_val(&it));
 
     Alarm(DEBUG, "Went back and tried to execute %d\n", i);
 
     /* If it's not ready, it will be re-added to the hash */
+    // Endadul
+    Alarm(PRINT, "attempt to execute pending commit with seq %d\n", slot->seq_num);
     ORDER_Execute_Commit(slot);
   }
 }
@@ -650,9 +721,7 @@ void ORDER_Update_Forwarding_White_Line()
 
 void ORDER_Attempt_To_Garbage_Collect_ORD_Slot(int32u seq)
 {
-  int32u i;
   ord_slot *slot;
-  ord_slot *pending_slot;
 
   slot = UTIL_Get_ORD_Slot_If_Exists(seq);
 
@@ -670,6 +739,19 @@ void ORDER_Attempt_To_Garbage_Collect_ORD_Slot(int32u seq)
   /* Need to have reconciled this slot and the next one */
   if(DATA.ORD.recon_white_line < (seq+1))
     return;
+
+  ORDER_Garbage_Collect_ORD_Slot(slot);
+
+}
+
+void ORDER_Garbage_Collect_ORD_Slot(ord_slot *slot)
+{
+  int32u i;
+  ord_slot *pending_slot;
+  int32u seq = slot->seq_num;
+
+  if(slot->pre_prepare)
+      dec_ref_cnt(slot->pre_prepare);
 
   /* We'll never need or allocate this slot again, so clear it out. */
   for(i = 1; i <= NUM_SERVERS; i++) {
@@ -725,7 +807,7 @@ void ORDER_Cleanup()
 	BENCH.max_signature_batch_size);
   
   Alarm(PRINT, "Number of messages sent of type:\n");
-  for(i = 1; i < CLIENT_RESPONSE+1; i++)
+  for(i = 1; i < LAST_MESSAGE_TYPE; i++)
     Alarm(PRINT, "  %-15s ---> %d\n", UTIL_Type_To_String(i), 
 	  BENCH.signature_types[i]);
 

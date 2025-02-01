@@ -21,9 +21,13 @@
  * Special thanks to Brian Coan for major contributions to the design of
  * the Prime algorithm. 
  *  	
- * Copyright (c) 2008 - 2010 
+ * Copyright (c) 2008 - 2013 
  * The Johns Hopkins University.
  * All rights reserved.
+ * 
+ * Major Contributor(s):
+ * --------------------
+ *     Jeff Seibert
  *
  */
 
@@ -31,6 +35,7 @@
  * has been validated and applies it to the data structures. */
 #include <assert.h>
 #include <string.h>
+#include <stdlib.h>
 #include "data_structs.h"
 #include "apply.h"
 #include "util/memory.h"
@@ -40,6 +45,7 @@
 #include "order.h"
 #include "recon.h"
 #include "pre_order.h"
+#include "objects.h"
 
 /* Gobally Accessible Variables */
 extern server_variables   VAR;
@@ -54,6 +60,24 @@ void APPLY_Pre_Prepare (signed_message *mess);
 void APPLY_Prepare     (signed_message *mess);
 void APPLY_Commit      (signed_message *mess);
 void APPLY_Recon       (signed_message *mess);
+void APPLY_RTT_Ping    (signed_message *mess);
+void APPLY_RTT_Pong    (signed_message *mess);
+void APPLY_RTT_Measure (signed_message *mess);
+void APPLY_TAT_Measure (signed_message *mess);
+void APPLY_TAT_UB (signed_message *mess);
+void APPLY_New_Leader (signed_message *mess);
+void APPLY_New_Leader_Proof (signed_message *mess);
+void APPLY_RB_Init (signed_message *mess);
+void APPLY_RB_Echo (signed_message *mess);
+void APPLY_RB_Ready (signed_message *mess);
+void APPLY_Report (signed_message *mess);
+void APPLY_PC_Set (signed_message *mess);
+void APPLY_VC_List (signed_message *mess);
+void APPLY_VC_Partial_Sig (signed_message *mess);
+void APPLY_VC_Proof (signed_message *mess);
+void APPLY_Replay (signed_message *mess);
+void APPLY_Replay_Prepare (signed_message *mess);
+void APPLY_Replay_Commit (signed_message *mess);
 
 int32u APPLY_Prepare_Certificate_Ready(ord_slot *slot);
 void   APPLY_Move_Prepare_Certificate (ord_slot *slot);
@@ -88,7 +112,7 @@ void APPLY_Message_To_Data_Structs(signed_message *mess)
     /* If the delay attack is used, the leader ignores PO-ARU messages 
      * and only handles proof matrix messages when it needs to. */
 #if DELAY_ATTACK
-    if(!UTIL_I_Am_Leader())
+    if(VAR.My_Server_ID != 2 || !UTIL_I_Am_Leader())
       APPLY_PO_ARU(mess);
 #else
     APPLY_PO_ARU(mess);
@@ -101,7 +125,7 @@ void APPLY_Message_To_Data_Structs(signed_message *mess)
      * message to a queue and only processes it when it needs to, when
      * it comes time to send the Pre-Prepare. */
 #if DELAY_ATTACK
-    if(!UTIL_I_Am_Leader())
+    if(VAR.My_Server_ID != 2 || !UTIL_I_Am_Leader())
       APPLY_Proof_Matrix(mess);
 #else
     APPLY_Proof_Matrix(mess);
@@ -118,6 +142,78 @@ void APPLY_Message_To_Data_Structs(signed_message *mess)
 
   case COMMIT:
     APPLY_Commit(mess);
+    break;
+
+  case RTT_PING:
+    APPLY_RTT_Ping(mess);
+    break;
+
+  case RTT_PONG:
+    APPLY_RTT_Pong(mess);
+    break;
+
+  case RTT_MEASURE:
+    APPLY_RTT_Measure(mess);
+    break;
+
+  case TAT_MEASURE:
+    APPLY_TAT_Measure(mess);
+    break;
+
+  case TAT_UB:
+    APPLY_TAT_UB(mess);
+    break;
+
+  case NEW_LEADER:
+    APPLY_New_Leader(mess);
+    break;
+
+  case NEW_LEADER_PROOF:
+    APPLY_New_Leader_Proof(mess);
+    break;
+
+  case RB_INIT:
+    APPLY_RB_Init(mess);
+    break;
+
+  case RB_ECHO:
+    APPLY_RB_Echo(mess);
+    break;
+
+  case RB_READY:
+    APPLY_RB_Ready(mess);
+    break;
+
+  case REPORT:
+    APPLY_Report(mess);
+    break;
+
+  case PC_SET:
+    APPLY_PC_Set(mess);
+    break;
+
+  case VC_LIST:
+    APPLY_VC_List(mess);
+    break;
+
+  case VC_PARTIAL_SIG:
+    APPLY_VC_Partial_Sig(mess);
+    break;
+
+  case VC_PROOF:
+    APPLY_VC_Proof(mess);
+    break;
+
+  case REPLAY:
+    APPLY_Replay(mess);
+    break;
+
+  case REPLAY_PREPARE:
+    APPLY_Replay_Prepare(mess);
+    break;
+
+  case REPLAY_COMMIT:
+    APPLY_Replay_Commit(mess);
     break;
 
   case RECON:
@@ -251,7 +347,7 @@ void APPLY_PO_ARU(signed_message *po_aru)
   int32u num;
   po_aru_signed_message *prev, *cur;
   int32u i, val;
-
+  cur = (po_aru_signed_message *)po_aru;
   /* If the PO_ARU is contained in a Proof matrix, then it may be a null
    * vector.  Don't apply it in this case. */
   if(po_aru->type != PO_ARU)
@@ -259,23 +355,33 @@ void APPLY_PO_ARU(signed_message *po_aru)
 
   /* We will store the latest PO-ARU received from each server -- this
    * constitutes the proof */
-  Alarm(DEBUG, "PO_ARU from %d\n", po_aru->machine_id);
 
   prev = &(DATA.PO.cum_acks[po_aru->machine_id]);
 
   num      = ((po_aru_message*)(po_aru+1))->num;
   prev_num = prev->cum_ack.num;
 
+  int32u check = 1;
+
+  if (num < prev_num) {
+      check = 0;
+  }
+  for (i = 0; i < NUM_SERVERS; ++i) {
+    if (cur->cum_ack.ack_for_server[i] < prev->cum_ack.ack_for_server[i]) {
+	check = 0;
+    }
+  }
+
   /* TODO: We should really check to make sure they are consistent here,
    * rather than just blindly adopting the one with the highest number. */
-  if(num >= prev_num) {
+  if(check) {
     memcpy( (void*)( &DATA.PO.cum_acks[po_aru->machine_id]), 
 	    (void*)po_aru, sizeof(po_aru_signed_message));
   }
 
   /* See if I can use this to increase my knowledge of what the acker
    * has contiguously received with respect to po-requests */
-  cur = (po_aru_signed_message *)po_aru;
+
   for(i = 1; i <= NUM_SERVERS; i++) {
     val = cur->cum_ack.ack_for_server[i-1];
 
@@ -307,77 +413,83 @@ void APPLY_Proof_Matrix(signed_message *pm)
 
 void APPLY_Pre_Prepare (signed_message *mess)
 {
-  pre_prepare_message *pre_prepare_specific;
-  ord_slot *slot;
-  int32u index, part_num;
+    pre_prepare_message *pre_prepare_specific;
+    ord_slot *slot;
+    int32u index, part_num;
 
-  pre_prepare_specific = (pre_prepare_message *)(mess + 1);
-
-  Alarm(DEBUG, "APPLY Pre_Prepare\n");
-  
-  /* If we're done forwarding for this slot, and we've already reconciled
-   * on this slot and the next, and we've already executed this slot and
-   * the next one, then there's no reason to do anything else with this
-   * sequence number. */
-  if(pre_prepare_specific->seq_num <= DATA.ORD.forwarding_white_line &&
-     (pre_prepare_specific->seq_num+1) <= DATA.ORD.recon_white_line &&
-     (pre_prepare_specific->seq_num+1) <= DATA.ORD.ARU)
-    return;
-  
-  /* Something to do: Get the slot */
-  slot = UTIL_Get_ORD_Slot(pre_prepare_specific->seq_num);
-
-  /* If we've already collected all of the parts, ignore */
-  if(slot->collected_all_parts)
-    return;
-
-  slot->seq_num     = pre_prepare_specific->seq_num;
-  slot->view        = pre_prepare_specific->view;
-  slot->total_parts = pre_prepare_specific->total_parts;
-  part_num          = pre_prepare_specific->part_num;
-
-  slot->complete_pre_prepare.seq_num = slot->seq_num;
-  slot->complete_pre_prepare.view    = slot->view;
-
-  /* If we need this part, store it.  Then see if we've now collected
-   * all of the parts. */
-  if(slot->pre_prepare_parts[part_num] == 0) {
-
-    slot->pre_prepare_parts[part_num] = 1;
-    Alarm(DEBUG, "Storing Pre-Prepare part %d for seq %d\n",
-          part_num, slot->seq_num);
-
-    if(part_num == 1)
-      index = 0;
-    else
-      index = (3*NUM_FAULTS+1) / 2;
-
-    /* Copy the bytes of this Pre-Prepare into the complete PP */
-    Alarm(DEBUG, "Copying part %d to starting index %d\n", part_num, index);
-    memcpy((byte *)(slot->complete_pre_prepare.cum_acks + index),
-           (byte *)(pre_prepare_specific + 1),
-           sizeof(po_aru_signed_message) *
-           pre_prepare_specific->num_acks_in_this_message);
-    
-    slot->num_parts_collected++;
-    
-    if(slot->num_parts_collected == slot->total_parts) {
-      slot->collected_all_parts = 1;
-      slot->should_handle_complete_pre_prepare = 1;
-
-      /* If I'm the leader, mark that I've forwarded all parts because
-       * I never go and forward them. */
-      if(UTIL_I_Am_Leader()) {
-	slot->num_forwarded_parts = slot->total_parts;
-	ORDER_Update_Forwarding_White_Line();
-      }
-
-      /* A Prepare certificate could be ready if we get some Prepares
-       * before we get the Pre-Prepare. */
-      if(APPLY_Prepare_Certificate_Ready(slot))
-        APPLY_Move_Prepare_Certificate(slot);
+    pre_prepare_specific = (pre_prepare_message *)(mess + 1);
+    if (pre_prepare_specific->view != DATA.View) {
+	//possible if leader sends pre-prepare, but then view changes to get here
+	return;
     }
-  }
+
+    Alarm(DEBUG, "APPLY Pre_Prepare\n");
+
+    /* If we're done forwarding for this slot, and we've already reconciled
+     * on this slot and the next, and we've already executed this slot and
+     * the next one, then there's no reason to do anything else with this
+     * sequence number. */
+    if(pre_prepare_specific->seq_num <= DATA.ORD.forwarding_white_line &&
+	    (pre_prepare_specific->seq_num+1) <= DATA.ORD.recon_white_line &&
+	    (pre_prepare_specific->seq_num+1) <= DATA.ORD.ARU)
+	return;
+
+    /* Something to do: Get the slot */
+    slot = UTIL_Get_ORD_Slot(pre_prepare_specific->seq_num);
+
+    /* If we've already collected all of the parts, ignore */
+    if(slot->collected_all_parts)
+	return;
+
+    slot->seq_num     = pre_prepare_specific->seq_num;
+    slot->view        = pre_prepare_specific->view;
+    slot->total_parts = pre_prepare_specific->total_parts;
+    part_num          = pre_prepare_specific->part_num;
+
+    slot->complete_pre_prepare.seq_num = slot->seq_num;
+    slot->complete_pre_prepare.view    = slot->view;
+
+    /* If we need this part, store it.  Then see if we've now collected
+     * all of the parts. */
+    if(slot->pre_prepare_parts[part_num] == 0) {
+
+	slot->pre_prepare_parts[part_num] = 1;
+	Alarm(DEBUG, "Storing Pre-Prepare part %d for seq %d\n",
+		part_num, slot->seq_num);
+
+	if(part_num == 1)
+	    index = 0;
+	else
+	    index = (3*NUM_FAULTS+1) / 2;
+
+	/* Copy the bytes of this Pre-Prepare into the complete PP */
+	Alarm(DEBUG, "Copying part %d to starting index %d\n", part_num, index);
+	memcpy((byte *)(slot->complete_pre_prepare.cum_acks + index),
+		(byte *)(pre_prepare_specific + 1),
+		sizeof(po_aru_signed_message) *
+		pre_prepare_specific->num_acks_in_this_message);
+
+	slot->num_parts_collected++;
+
+	if(slot->num_parts_collected == slot->total_parts) {
+
+	    slot->collected_all_parts = 1;
+	    slot->should_handle_complete_pre_prepare = 1;
+
+
+	    /* If I'm the leader, mark that I've forwarded all parts because
+	     * I never go and forward them. */
+	    if(UTIL_I_Am_Leader()) {
+		slot->num_forwarded_parts = slot->total_parts;
+		ORDER_Update_Forwarding_White_Line();
+	    }
+
+	    /* A Prepare certificate could be ready if we get some Prepares
+	     * before we get the Pre-Prepare. */
+	    if(APPLY_Prepare_Certificate_Ready(slot))
+		APPLY_Move_Prepare_Certificate(slot);
+	}
+    }
 }
 
 void APPLY_Prepare(signed_message *prepare)
@@ -428,11 +540,14 @@ int32u APPLY_Prepare_Certificate_Ready(ord_slot *slot)
 
   for(sn = 1; sn <= NUM_SERVERS; sn++) {
     if(prepare[sn] != NULL) {
-      if(APPLY_Prepare_Matches_Pre_Prepare(prepare[sn], pp))
+      if(APPLY_Prepare_Matches_Pre_Prepare(prepare[sn], pp)) {
         pcount++;
-      else
-        Alarm(EXIT,"PREPARE didn't match pre-prepare while "
+      } else {
+        Alarm(PRINT,"PREPARE didn't match pre-prepare while "
               "checking for prepare certificate.\n");
+        dec_ref_cnt(prepare[sn]);
+        prepare[sn] = NULL;
+      }
     }
   }
 
@@ -559,10 +674,13 @@ int32u APPLY_Commit_Certificate_Ready(ord_slot *slot)
 
   for(sn = 1; sn <= NUM_SERVERS; sn++) {
     if(commit[sn] != NULL) {
-      if(APPLY_Commit_Matches_Pre_Prepare(commit[sn], pp))
+      if(APPLY_Commit_Matches_Pre_Prepare(commit[sn], pp)) {
 	pcount++;
-      else
-	Alarm(EXIT, "COMMIT didn't match Pre-Prepare\n");
+      } else {
+	Alarm(PRINT, "COMMIT didn't match Pre-Prepare\n");
+        dec_ref_cnt(commit[sn]);
+	commit[sn] = NULL;
+      }
     }
   }
 
@@ -639,6 +757,305 @@ void APPLY_Move_Commit_Certificate(ord_slot *slot)
   /* The next time that we process a commit, we should execute. */
   slot->execute_commit = 1;
   slot->ordered = 1;
+}
+
+void APPLY_RTT_Ping    (signed_message *mess) {
+
+}
+
+void APPLY_RTT_Pong    (signed_message *mess) {
+
+}
+
+void APPLY_RTT_Measure (signed_message *mess) {
+    rtt_measure_message *measure = (rtt_measure_message*)(mess + 1);
+    double delta = (double)PRE_PREPARE_SEC + (double)(PRE_PREPARE_USEC)/1000000.0;
+    double t = measure->rtt * VARIABILITY_KLAT + delta;
+    //printf("tats_if_leader %f %f %d\n", measure->rtt, t, mess->machine_id);
+    if (mess->machine_id != VAR.My_Server_ID && t < DATA.SUS.tats_if_leader[mess->machine_id]) {
+	DATA.SUS.tats_if_leader[mess->machine_id] = t;
+    }
+}
+
+void APPLY_TAT_Measure (signed_message *mess) {
+    double tats[NUM_SERVER_SLOTS];
+    int i;
+
+    tat_measure_message *measure = (tat_measure_message*)(mess + 1);
+    if (measure->max_tat > DATA.SUS.reported_tats[mess->machine_id]) {
+	DATA.SUS.reported_tats[mess->machine_id] = measure->max_tat;
+    }
+
+    for (i = 1; i <= NUM_SERVERS; i++) {
+	tats[i] = DATA.SUS.reported_tats[i];
+    }
+    //printf("tat_leader %f %f %f %f\n", tats[1], tats[2], tats[3], tats[4]);
+    qsort((void*)(tats+1), NUM_SERVERS, sizeof(double), doublecmp);
+
+    DATA.SUS.tat_leader = tats[VAR.Faults + 1];
+}
+
+void APPLY_TAT_UB (signed_message *mess) {
+    double tats[NUM_SERVER_SLOTS];
+    int i;
+
+    tat_upper_bound_message *ub = (tat_upper_bound_message*)(mess + 1);
+    if (/*mess->machine_id != VAR.My_Server_ID &&*/ ub->alpha < DATA.SUS.tat_leader_ubs[mess->machine_id]) {
+	//printf("alpha lower %f\n", ub->alpha);
+	DATA.SUS.tat_leader_ubs[mess->machine_id] = ub->alpha;
+    }
+
+    for (i = 1; i <= NUM_SERVERS; i++) {
+	tats[i] = DATA.SUS.tat_leader_ubs[i];
+    }
+    ///viprintf("tat_acceptable %f %f %f %f\n", tats[1], tats[2], tats[3], tats[4]);
+    qsort((void*)(tats+1), NUM_SERVERS, sizeof(double), doublecmp);
+
+    DATA.SUS.tat_acceptable = tats[NUM_SERVER_SLOTS - (VAR.Faults + 1)];
+}
+
+void APPLY_New_Leader (signed_message *mess) {
+    //Alarm(PRINT, "Applying new leader\n");
+    new_leader_message *new_leader = (new_leader_message*)(mess+1);
+    signed_message *leader;
+    new_leader_message *leader_specific;
+    int32u view = 1;
+
+    leader = DATA.SUS.new_leader[mess->machine_id];
+    if (leader != NULL) {
+	leader_specific = (new_leader_message*)(leader+1);
+	view = leader_specific->new_view;
+	if (new_leader->new_view <= view) {
+	    return;
+	}
+	dec_ref_cnt(leader);
+    }
+
+    signed_message *copy = new_ref_cnt(PACK_BODY_OBJ);
+    if (copy == NULL) {
+	Alarm(EXIT, "Apply_New_Leader: could not allocate space for message\n");
+    }
+    memcpy(copy, mess, UTIL_Message_Size(mess));
+    inc_ref_cnt(copy);
+    DATA.SUS.new_leader[copy->machine_id] = copy;
+
+
+    if (DATA.View >= new_leader->new_view) {
+	return;
+    }
+
+    int32u count = 0;
+
+    int i;
+    for (i = 1; i <= NUM_SERVERS; i++) {
+	if (DATA.SUS.new_leader[i] == NULL) {
+	    continue;
+	}
+	leader = DATA.SUS.new_leader[i];
+	leader_specific = (new_leader_message*)(leader+1);
+	view = leader_specific->new_view;
+	if (new_leader->new_view == view) {
+	    count++;
+	}
+    }
+
+    if (count > VAR.Faults) {
+	DATA.SUS.new_leader_count = count;
+
+	//if 2f+1 received, preinstall next view
+	if (DATA.SUS.new_leader_count > 2*VAR.Faults) {
+	    Alarm(PRINT, "view change from %d to %d\n", DATA.View, new_leader->new_view);
+	    DATA.View = new_leader->new_view;
+	    DATA.preinstall = 1;
+	    DATA.SUS.sent_proof = 0;
+            if (UTIL_I_Am_Leader()) {
+                Alarm(PRINT, "I AM THE NEW LEADER\n\n");
+            }
+            else {
+                Alarm(PRINT, "New leader = %d\n\n", UTIL_Leader());
+            }
+	}
+    }
+
+}
+
+void APPLY_New_Leader_Proof (signed_message *mess) {
+    Alarm(DEBUG, "Applying new leader proof from %d\n", mess->machine_id);
+    new_leader_proof_message* new_leader_proof = (new_leader_proof_message*)(mess+1);
+
+    signed_message *new_leader = (signed_message*)(new_leader_proof+1);
+    int count = 0;
+
+    while (count < 2*VAR.Faults+1) {
+	APPLY_New_Leader(new_leader);
+	new_leader = (signed_message*)((char*)new_leader + UTIL_Message_Size(new_leader));
+	count++;
+    }
+
+}
+
+void APPLY_RB_Init (signed_message *mess) {
+    signed_message *payload = (mess+1);
+    reliable_broadcast_tag *rb_tag = (reliable_broadcast_tag*)(payload+1);
+    int i;
+
+    DATA.REL.seq_num[payload->machine_id] = rb_tag->seq_num;
+    DATA.REL.rb_step[payload->machine_id] = 1;
+    //DATA.REL.rb_init[payload->machine_id] = mess;
+    //inc_ref_cnt(mess);
+    for (i = 1; i <= NUM_SERVERS; ++i) {
+	DATA.REL.rb_echo[payload->machine_id][i] = 0;
+	DATA.REL.rb_ready[payload->machine_id][i] = 0;
+    }
+
+
+}
+
+void APPLY_RB_Echo (signed_message *mess) {
+    signed_message *payload = (mess+1);
+    reliable_broadcast_tag *rb_tag = (reliable_broadcast_tag*)(payload+1);
+    int i;
+
+    if (DATA.REL.seq_num[payload->machine_id] < rb_tag->seq_num) {
+	DATA.REL.seq_num[payload->machine_id] = rb_tag->seq_num;
+	DATA.REL.rb_step[payload->machine_id] = 1;
+	//DATA.REL.rb_init[payload->machine_id] = mess;
+	//inc_ref_cnt(mess);
+	for (i = 1; i <= NUM_SERVERS; ++i) {
+	    DATA.REL.rb_echo[payload->machine_id][i] = 0;
+	    DATA.REL.rb_ready[payload->machine_id][i] = 0;
+	}
+    }
+    DATA.REL.rb_echo[payload->machine_id][mess->machine_id] = 1;
+}
+
+void APPLY_RB_Ready (signed_message *mess) {
+    signed_message *payload = (mess+1);
+    reliable_broadcast_tag *rb_tag = (reliable_broadcast_tag*)(payload+1);
+    int i;
+
+    if (DATA.REL.seq_num[payload->machine_id] < rb_tag->seq_num) {
+	DATA.REL.seq_num[payload->machine_id] = rb_tag->seq_num;
+	DATA.REL.rb_step[payload->machine_id] = 1;
+	//DATA.REL.rb_init[payload->machine_id] = mess;
+	//inc_ref_cnt(mess);
+	for (i = 1; i <= NUM_SERVERS; ++i) {
+	    DATA.REL.rb_echo[payload->machine_id][i] = 0;
+	    DATA.REL.rb_ready[payload->machine_id][i] = 0;
+	}
+    }
+    DATA.REL.rb_ready[payload->machine_id][mess->machine_id] = 1;
+}
+
+void APPLY_Report (signed_message *mess) {
+    report_message *report = (report_message*)(mess+1);
+
+    memcpy(&DATA.VIEW.report[mess->machine_id], report, sizeof(report_message));
+    DATA.VIEW.received_report[mess->machine_id] = 1;
+    if (DATA.VIEW.executeTo < report->execARU) {
+	DATA.VIEW.executeTo = report->execARU;
+	ord_slot *slot = UTIL_Get_ORD_Slot_If_Exists(DATA.ORD.ARU+1);
+	if (slot != NULL) {
+	    //Alarm(PRINT, "apply report execute commit\n", slot->seq_num);
+	    ORDER_Execute_Commit(slot);
+	}
+    }
+    if (report->pc_set_size == 0 && DATA.ORD.ARU >= report->execARU) {
+	UTIL_Bitmap_Set(&DATA.VIEW.complete_state, mess->machine_id);
+    }
+}
+
+void APPLY_PC_Set (signed_message *mess) {
+    //pc_set_message *pc_set = (pc_set_message*)(mess+1);
+    Alarm(DEBUG, "Applying PC_Set %d %d\n", mess->machine_id, DATA.VIEW.pc_set[mess->machine_id]);
+    report_message *report = &DATA.VIEW.report[mess->machine_id];
+    UTIL_DLL_Add_Data(&DATA.VIEW.pc_set[mess->machine_id], mess);
+    //Alarm(PRINT, "done add data %d\n", DATA.VIEW.pc_set[mess->machine_id].length);
+
+    if (report->pc_set_size == DATA.VIEW.pc_set[mess->machine_id].length && DATA.ORD.ARU >= report->execARU) {
+	UTIL_Bitmap_Set(&DATA.VIEW.complete_state, mess->machine_id);
+    }
+    //Alarm(PRINT, "Done applying pc_set\n");
+}
+
+void APPLY_VC_List (signed_message *mess) {
+    Alarm(DEBUG, "Applying VC List %d\n", DATA.VIEW.sent_vc_partial_sig[1]);
+    vc_list_message *vc_list = (vc_list_message*)(mess+1);
+    DATA.VIEW.received_vc_list[mess->machine_id] = 1;
+    memcpy(&DATA.VIEW.vc_list[mess->machine_id], vc_list, mess->len);
+}
+
+void APPLY_VC_Partial_Sig (signed_message *mess) {
+    vc_partial_sig_message *vc_partial_sig = (vc_partial_sig_message*)(mess+1);
+    int i;
+    for (i = 0; i < NUM_SERVERS; ++i) {
+	if (DATA.VIEW.received_vc_partial_sig[mess->machine_id][i] == 0) {
+	    DATA.VIEW.received_vc_partial_sig[mess->machine_id][i] = 1;
+	    memcpy(&DATA.VIEW.vc_partial_sig[mess->machine_id][i], vc_partial_sig, sizeof(vc_partial_sig_message));
+	    break;
+	}
+    }
+}
+
+void APPLY_VC_Proof (signed_message *mess) {
+
+}
+
+void APPLY_Replay (signed_message *mess) {
+    if (DATA.VIEW.replay == NULL) {
+	inc_ref_cnt(mess);
+	DATA.VIEW.replay = mess;
+    }
+
+    int32u i;
+    int32u count = 1;
+    for (i = 1; i <= NUM_SERVERS; ++i) {
+	if (DATA.VIEW.replay_prepare[i] != NULL) {
+	    count++;
+	}
+    }
+    if (count >= 2*VAR.Faults) {
+	DATA.VIEW.prepare_ready = 1;
+    }
+
+}
+
+void APPLY_Replay_Prepare (signed_message *mess) {
+    if (DATA.VIEW.replay_prepare[mess->machine_id] == NULL) {
+	inc_ref_cnt(mess);
+	DATA.VIEW.replay_prepare[mess->machine_id] = mess;
+    }
+    int32u i;
+    int32u count = 0;
+    if (DATA.VIEW.replay != NULL) {
+	count++;
+    }
+    for (i = 1; i <= NUM_SERVERS; ++i) {
+	if (DATA.VIEW.replay_prepare[i] != NULL) {
+	    count++;
+	}
+    }
+    if (count > 2*VAR.Faults) {
+	DATA.VIEW.prepare_ready = 1;
+    }
+
+}
+
+void APPLY_Replay_Commit (signed_message *mess) {
+    if (DATA.VIEW.replay_commit[mess->machine_id] == NULL) {
+	inc_ref_cnt(mess);
+	DATA.VIEW.replay_commit[mess->machine_id] = mess;
+    }
+    int32u i;
+    int32u count = 0;
+    for (i = 1; i <= NUM_SERVERS; ++i) {
+	if (DATA.VIEW.replay_commit[i] != NULL) {
+	    count++;
+	}
+    }
+    if (DATA.VIEW.prepare_ready && count > 2*VAR.Faults) {
+	DATA.VIEW.commit_ready = 1;
+    }
 }
 
 void APPLY_Recon(signed_message *recon)

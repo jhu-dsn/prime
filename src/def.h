@@ -21,9 +21,13 @@
  * Special thanks to Brian Coan for major contributions to the design of
  * the Prime algorithm. 
  *  	
- * Copyright (c) 2008 - 2010 
+ * Copyright (c) 2008 - 2013 
  * The Johns Hopkins University.
  * All rights reserved.
+ *
+ * Major Contributor(s):
+ * --------------------
+ *     Jeff Seibert
  *
  */
 
@@ -31,6 +35,8 @@
 #define PRIME_DEF_H
 
 /*---------------------System-wide Configuration Settings-------------------*/
+
+/* PRIME for 4 server configuration */
 
 /* Maximum number of tolerated faults */
 #define NUM_FAULTS  1
@@ -40,7 +46,7 @@
 #define NUM_SERVERS 4
 
 /* Maximum number of clients */
-#define NUM_CLIENTS 100
+#define NUM_CLIENTS 10
 
 /* Number of bytes in a client update */
 #define UPDATE_SIZE 200
@@ -56,6 +62,11 @@
  * instead sends the complete PO-Request itself (not encoded). */
 #define USE_ERASURE_CODES 0
 
+/* Variability constant K_Lat */
+
+#define VARIABILITY_KLAT 10.0
+
+
 /*--------------------Networking Settings-----------------------------------*/
 
 #define PRIME_BOUNDED_MCAST_PORT       7100
@@ -66,7 +77,7 @@
 #define PRIME_RECON_SERVER_BASE_PORT   7300
 #define PRIME_SPINES_SERVER_BASE_PORT  7350
 #define PRIME_CLIENT_BASE_PORT         7400
-#define SPINES_PORT                    8900
+#define SPINES_PORT                    8100
 
 /* Set this to 1 if IP multicast is available (i.e., when running in a
  * LAN).  Note that this option is not compatible with the
@@ -150,6 +161,20 @@
 #define PO_PERIODICALLY_SEC  0
 #define PO_PERIODICALLY_USEC 3000
 
+/* How often do we send a Ping? */
+#define SUSPECT_PING_SEC  1
+#define SUSPECT_PING_USEC 0
+
+/* How often do we send turn-around-time measure messages ? */
+#define SUSPECT_TAT_MEASURE_SEC 0
+#define SUSPECT_TAT_MEASURE_USEC 500000
+
+#define SUSPECT_TAT_UB_SEC 1
+#define SUSPECT_TAT_UB_USEC 0
+
+#define SUSPECT_LEADER_SEC 0
+#define SUSPECT_LEADER_USEC 500000
+
 /* These flags control which PO messages are sent periodically.  Set
  * an entry to 0 to have it NOT be sent periodically. */ 
 #define SEND_PO_REQUESTS_PERIODICALLY  1
@@ -201,7 +226,9 @@
 
 #define BROADCAST                  0
 
-#define PRIME_MAX_PACKET_SIZE      1472
+//JCS: I increased the max packet size so that PC_Set messages could be sent in a single UDP message. We may want to change this if doing WAN experiments, if network can't handle such big UDP packets, or if using more than 4 servers. If so, will most likely need to implement a service that runs right on top of UDP that does something like fragmentation.
+
+#define PRIME_MAX_PACKET_SIZE      2500 //2000 //1472 
 #define NUM_SERVER_SLOTS           (NUM_SERVERS+1)
 
 /* We store two additional pieces of information, each an integer, in

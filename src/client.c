@@ -21,9 +21,13 @@
  * Special thanks to Brian Coan for major contributions to the design of
  * the Prime algorithm. 
  *  	
- * Copyright (c) 2008 - 2010 
+ * Copyright (c) 2008 - 2013 
  * The Johns Hopkins University.
  * All rights reserved.
+ *
+ * Major Contributor(s):
+ * --------------------
+ *     Jeff Seibert
  *
  */
 
@@ -53,7 +57,7 @@
  * having multiple requests outstanding at one time.  After sending
  * the specified number of requests, the client does not send a new
  * one until it receives a response to one of the previous ones. */
-#define NUM_CLIENTS_TO_EMULATE 1 
+#define NUM_CLIENTS_TO_EMULATE 1
 
 /* Adjust this to configure how often a client prints. */
 #define PRINT_INTERVAL NUM_CLIENTS_TO_EMULATE

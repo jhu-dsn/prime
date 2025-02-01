@@ -21,9 +21,13 @@
  * Special thanks to Brian Coan for major contributions to the design of
  * the Prime algorithm. 
  *  	
- * Copyright (c) 2008 - 2010 
+ * Copyright (c) 2008 - 2013 
  * The Johns Hopkins University.
  * All rights reserved.
+ *
+ * Major Contributor(s):
+ * --------------------
+ *     Jeff Seibert
  *
  */
 
@@ -33,6 +37,7 @@
 #include "util/arch.h"
 #include "util_dll.h"
 #include "data_structs.h"
+
 
 void MT_Test (void);
 void MT_Clear(void);

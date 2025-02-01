@@ -21,9 +21,13 @@
  * Special thanks to Brian Coan for major contributions to the design of
  * the Prime algorithm. 
  *  	
- * Copyright (c) 2008 - 2010 
+ * Copyright (c) 2008 - 2013 
  * The Johns Hopkins University.
  * All rights reserved.
+ *
+ * Major Contributor(s):
+ * --------------------
+ *     Jeff Seibert
  *
  */
 
@@ -102,6 +106,7 @@ signed_message* PRE_ORDER_Construct_PO_Request()
 
   
   po_request_specific->num_events = num_events;
+
   /* Subtract sizeof(signed_message) because even though we send out
    * that many bytes, the len field is just the content, not the signed
    * message part. */
@@ -226,6 +231,7 @@ signed_message* PRE_ORDER_Construct_PO_ARU()
   po_aru_specific = (po_aru_message*)(po_aru + 1);
 
   po_aru->machine_id = VAR.My_Server_ID;
+
   po_aru->type       = PO_ARU;
   po_aru->len        = sizeof(po_aru_message);
   
@@ -233,6 +239,7 @@ signed_message* PRE_ORDER_Construct_PO_ARU()
   DATA.PO.po_aru_num++;
 
   /* Fill in vector of cumulative pre order acks */
+
   for (s = 0; s < NUM_SERVERS; s++)
     po_aru_specific->ack_for_server[s] = DATA.PO.cum_aru[s+1];
 
@@ -316,6 +323,7 @@ void ORDER_Construct_Pre_Prepare(signed_message **mset,int32u *num_parts)
 
     pp_specific              = (pre_prepare_message *)(mess+1);
     pp_specific->seq_num     = DATA.ORD.seq;
+    //Alarm(PRINT, "pre-prepare seq %d\n", DATA.ORD.seq);
     pp_specific->view        = DATA.View;
     pp_specific->part_num    = i;
     pp_specific->total_parts = total_parts;
@@ -410,6 +418,398 @@ signed_message *ORDER_Construct_Client_Response(int32u client_id,
 
   return response;
 }
+
+signed_message *SUSPECT_Construct_RTT_Ping()
+{
+  signed_message *ping;
+  rtt_ping_message *ping_specific;
+
+  /* Construct new message */
+  ping = UTIL_New_Signed_Message();
+
+  ping_specific = (rtt_ping_message*)(ping + 1);
+
+  ping->machine_id = VAR.My_Server_ID;
+  ping->type       = RTT_PING;
+  ping->len        = sizeof(rtt_ping_message);
+
+  ping_specific->ping_seq_num = DATA.SUS.ping_seq_num;
+  ping_specific->view    = DATA.View;
+
+  return ping;
+}
+
+
+signed_message *SUSPECT_Construct_RTT_Pong(int32u server_id, int32u seq_num)
+{
+  signed_message *pong;
+  rtt_pong_message *pong_specific;
+
+  /* Construct new message */
+  pong = UTIL_New_Signed_Message();
+
+  pong_specific = (rtt_pong_message*)(pong + 1);
+
+  pong->machine_id = VAR.My_Server_ID;
+  pong->type       = RTT_PONG;
+  pong->len        = sizeof(rtt_pong_message);
+
+  pong_specific->ping_seq_num = seq_num;
+  pong_specific->view    = DATA.View;
+  pong_specific->recipient = server_id;
+
+  return pong;
+}
+
+signed_message *SUSPECT_Construct_RTT_Measure(int32u server_id, double rtt)
+{
+  signed_message *measure;
+  rtt_measure_message *measure_specific;
+
+  /* Construct new message */
+  measure = UTIL_New_Signed_Message();
+
+  measure_specific = (rtt_measure_message*)(measure + 1);
+
+  measure->machine_id = VAR.My_Server_ID;
+  measure->type       = RTT_MEASURE;
+  measure->len        = sizeof(rtt_measure_message);
+
+  measure_specific->rtt = rtt;
+  measure_specific->view = DATA.View;
+  measure_specific->recipient = server_id;
+
+  return measure;
+}
+
+signed_message *SUSPECT_Construct_TAT_Measure(double max_tat)
+{
+  signed_message *measure;
+  tat_measure_message *measure_specific;
+
+  /* Construct new message */
+  measure = UTIL_New_Signed_Message();
+
+  measure_specific = (tat_measure_message*)(measure + 1);
+
+  measure->machine_id = VAR.My_Server_ID;
+  measure->type       = TAT_MEASURE;
+  measure->len        = sizeof(tat_measure_message);
+
+  measure_specific->max_tat = max_tat;
+  measure_specific->view = DATA.View;
+
+  return measure;
+}
+
+signed_message *SUSPECT_Construct_TAT_UB(double alpha)
+{
+  signed_message *ub;
+  tat_upper_bound_message *ub_specific;
+
+  /* Construct new message */
+  ub = UTIL_New_Signed_Message();
+
+  ub_specific = (tat_upper_bound_message*)(ub + 1);
+
+  ub->machine_id = VAR.My_Server_ID;
+  ub->type       = TAT_UB;
+  ub->len        = sizeof(tat_upper_bound_message);
+
+  ub_specific->alpha = alpha;
+  ub_specific->view = DATA.View;
+
+  return ub;
+}
+
+signed_message *SUSPECT_Construct_New_Leader()
+{
+  signed_message *new_leader;
+  new_leader_message *new_leader_specific;
+
+  /* Construct new message */
+  new_leader = UTIL_New_Signed_Message();
+
+  new_leader_specific = (new_leader_message*)(new_leader + 1);
+
+  new_leader->machine_id = VAR.My_Server_ID;
+  new_leader->type       = NEW_LEADER; 
+  new_leader->len        = sizeof(new_leader_message);
+
+  new_leader_specific->new_view = DATA.View + 1;
+
+  return new_leader;
+}
+
+signed_message *SUSPECT_Construct_New_Leader_Proof()
+{
+    signed_message *new_leader_proof;
+    new_leader_proof_message *new_leader_proof_specific;
+    char *ptr;
+    new_leader_message *new_leader;
+
+    /* Construct new message */
+    new_leader_proof = UTIL_New_Signed_Message();
+
+    new_leader_proof_specific = (new_leader_proof_message*)(new_leader_proof + 1);
+
+    new_leader_proof->machine_id = VAR.My_Server_ID;
+    new_leader_proof->type       = NEW_LEADER_PROOF; 
+    new_leader_proof->len        = sizeof(new_leader_proof_message);
+
+    new_leader_proof_specific->new_view = DATA.View; //is already new view (but only preinstalled)
+    //Alarm(PRINT, "creating new leader proof view %d\n", DATA.View);
+
+    ptr = (char*)(new_leader_proof_specific+1);
+    int count = 0;
+    int i = 1;
+    while (count < 2*VAR.Faults+1 && i <= NUM_SERVERS) {
+	if (DATA.SUS.new_leader[i] != NULL && DATA.SUS.new_leader[i]->type == NEW_LEADER) {
+	    new_leader = (new_leader_message*)(DATA.SUS.new_leader[i]+1);
+	    if(new_leader->new_view == DATA.View) {
+		int32u size = UTIL_Message_Size(DATA.SUS.new_leader[i]);
+		//Alarm(PRINT, "copying new leader into %x id %d view %d size %d\n", ptr, i, new_leader->new_view, size);
+		memcpy(ptr, DATA.SUS.new_leader[i], size);
+		count++;
+		ptr = ptr + size;
+		new_leader_proof->len += size;
+	    }
+	}
+	//Alarm(PRINT, "i %d, count %d %d\n", i, count, DATA.SUS.new_leader_count);
+	i++;
+    }
+    //Alarm(PRINT, "size %d\n", new_leader_proof->len);
+
+    return new_leader_proof;
+}
+
+signed_message* RELIABLE_Construct_RB_Init(signed_message *mess) {
+  signed_message *rb_init;
+  signed_message *payload;
+  //UTIL_Message_Size(mess) to find size but large merkle tree values would
+  //cause an assertion
+  int32u size = sizeof(signed_message)+mess->len;
+  /* Construct new message */
+  rb_init = UTIL_New_Signed_Message();
+
+  rb_init->machine_id = VAR.My_Server_ID;
+  rb_init->type       = RB_INIT; 
+  rb_init->len        = size;
+
+  payload = (signed_message*)(rb_init + 1);
+  memcpy(payload, (void*)mess, size);
+
+  return rb_init;
+
+}
+
+signed_message* RELIABLE_Construct_RB_Echo(signed_message *mess) {
+  signed_message *rb_echo;
+  signed_message *payload;
+  int32u size = sizeof(signed_message)+mess->len;
+
+  /* Construct new message */
+  rb_echo = UTIL_New_Signed_Message();
+
+  rb_echo->machine_id = VAR.My_Server_ID;
+  rb_echo->type       = RB_ECHO; 
+  rb_echo->len        = size;
+
+  payload = (signed_message*)(rb_echo + 1);
+  memcpy(payload, (void*)mess, size);
+
+  return rb_echo;
+}
+
+signed_message* RELIABLE_Construct_RB_Ready(signed_message *mess) {
+  signed_message *rb_ready;
+  signed_message *payload;
+  int32u size = sizeof(signed_message)+mess->len;
+
+  /* Construct new message */
+  rb_ready = UTIL_New_Signed_Message();
+
+  rb_ready->machine_id = VAR.My_Server_ID;
+  rb_ready->type       = RB_READY; 
+  rb_ready->len        = size;
+
+  payload = (signed_message*)(rb_ready + 1);
+  memcpy(payload, (void*)mess, size);
+
+  return rb_ready;
+
+}
+
+signed_message* VIEW_Construct_Report(void) {
+  signed_message *report;
+  report_message *report_specific;
+
+  /* Construct new message */
+  report = UTIL_New_Signed_Message();
+
+  report_specific = (report_message*)(report + 1);
+
+  report->machine_id = VAR.My_Server_ID;
+  report->type       = REPORT; 
+  report->len        = sizeof(report_message);
+
+  report_specific->execARU = DATA.ORD.ARU;
+  report_specific->pc_set_size = DATA.VIEW.numSeq;
+  return report;
+}
+
+signed_message* VIEW_Construct_PC_Set(char *cert, int size) {
+  signed_message *pc_set;
+  pc_set_message *pc_set_specific;
+
+  /* Construct new message */
+  pc_set = UTIL_New_Signed_Message();
+
+  pc_set_specific = (pc_set_message*)(pc_set + 1);
+
+  pc_set->machine_id = VAR.My_Server_ID;
+  pc_set->type       = PC_SET; 
+  pc_set->len        = sizeof(pc_set_message)+size;
+
+  char *ptr = (char*)(pc_set_specific+1);
+
+  memcpy(ptr, cert, size);
+
+  return pc_set;
+}
+
+signed_message* VIEW_Construct_VC_List(void) {
+  signed_message *vc_list;
+  vc_list_message *vc_list_specific;
+
+  /* Construct new message */
+  vc_list = UTIL_New_Signed_Message();
+
+  vc_list_specific = (vc_list_message*)(vc_list + 1);
+
+  vc_list->machine_id = VAR.My_Server_ID;
+  vc_list->type       = VC_LIST; 
+  vc_list->len        = sizeof(vc_list_message);
+
+  vc_list_specific->view = DATA.View;
+  
+  vc_list_specific->complete_state = DATA.VIEW.complete_state;
+
+  return vc_list;
+}
+
+signed_message* VIEW_Construct_VC_Partial_Sig(int32u ids) {
+  signed_message *vc_partial_sig;
+  vc_partial_sig_message *vc_partial_sig_specific;
+
+  /* Construct new message */
+  vc_partial_sig = UTIL_New_Signed_Message();
+
+  vc_partial_sig_specific = (vc_partial_sig_message*)(vc_partial_sig + 1);
+
+  vc_partial_sig->machine_id = VAR.My_Server_ID;
+  vc_partial_sig->type       = VC_PARTIAL_SIG; 
+  vc_partial_sig->len        = sizeof(vc_partial_sig_message);
+
+  vc_partial_sig_specific->view = DATA.View;
+  vc_partial_sig_specific->ids = ids;
+
+  int32u startSeq = 0;
+  int32u i;
+  for (i = 1; i <= NUM_SERVERS; ++i) {
+
+    if (UTIL_Bitmap_Is_Set(&ids, i) && startSeq < DATA.VIEW.report[i].execARU + DATA.VIEW.report[i].pc_set_size + 1) {
+	startSeq = DATA.VIEW.report[i].execARU + DATA.VIEW.report[i].pc_set_size + 1;
+    }
+  }
+
+
+  vc_partial_sig_specific->startSeq = startSeq;
+
+  byte digest[DIGEST_SIZE];
+  OPENSSL_RSA_Make_Digest( 
+	  vc_partial_sig_specific, 
+	  3*sizeof(int32u), 
+	  digest );
+  TC_Generate_Sig_Share(vc_partial_sig_specific->thresh_sig, digest); 
+
+  return vc_partial_sig;
+}
+
+signed_message* VIEW_Construct_VC_Proof(int32u view, int32u ids, int32u startSeq, byte *sig) {
+  signed_message *vc_proof;
+  vc_proof_message *vc_proof_specific;
+
+  /* Construct new message */
+  vc_proof = UTIL_New_Signed_Message();
+
+  vc_proof_specific = (vc_proof_message*)(vc_proof + 1);
+
+  vc_proof->machine_id = VAR.My_Server_ID;
+  vc_proof->type       = VC_PROOF; 
+  vc_proof->len        = sizeof(vc_proof_message);
+
+  vc_proof_specific->view = view;
+  vc_proof_specific->ids = ids;
+  vc_proof_specific->startSeq = startSeq;
+  memcpy(vc_proof_specific->thresh_sig, sig, SIGNATURE_SIZE);
+
+  return vc_proof;
+}
+
+signed_message* VIEW_Construct_Replay(vc_proof_message *proof) {
+  signed_message *replay;
+  replay_message *replay_specific;
+
+  /* Construct new message */
+  replay = UTIL_New_Signed_Message();
+
+  replay_specific = (replay_message*)(replay + 1);
+
+  replay->machine_id = VAR.My_Server_ID;
+  replay->type       = REPLAY; 
+  replay->len        = sizeof(replay_message);
+
+  memcpy(&replay_specific->proof, proof, sizeof(vc_proof_message));
+
+  return replay;
+
+}
+
+signed_message* VIEW_Construct_Replay_Prepare(void) {
+  signed_message *replay;
+  replay_message *replay_specific;
+
+  /* Construct new message */
+  replay = UTIL_New_Signed_Message();
+
+  replay_specific = (replay_message*)(replay + 1);
+
+  replay->machine_id = VAR.My_Server_ID;
+  replay->type       = REPLAY_PREPARE; 
+  replay->len        = sizeof(replay_prepare_message);
+
+  return replay;
+
+}
+
+signed_message* VIEW_Construct_Replay_Commit(void) {
+  signed_message *replay;
+  replay_message *replay_specific;
+
+  /* Construct new message */
+  replay = UTIL_New_Signed_Message();
+
+  replay_specific = (replay_message*)(replay + 1);
+
+  replay->machine_id = VAR.My_Server_ID;
+  replay->type       = REPLAY_COMMIT; 
+  replay->len        = sizeof(replay_commit_message);
+
+  return replay;
+
+}
+
 
 signed_message *RECON_Construct_Recon_Erasure_Message(dll_struct *list,
 						      int32u *more_to_encode)
