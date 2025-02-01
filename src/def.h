@@ -1,6 +1,6 @@
 /*
  * Prime.
- *     
+ *
  * The contents of this file are subject to the Prime Open-Source
  * License, Version 1.0 (the ``License''); you may not use
  * this file except in compliance with the License.  You may obtain a
@@ -10,24 +10,28 @@
  *
  * or in the file ``LICENSE.txt'' found in this distribution.
  *
- * Software distributed under the License is distributed on an AS IS basis, 
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License 
- * for the specific language governing rights and limitations under the 
+ * Software distributed under the License is distributed on an AS IS basis,
+ * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
+ * for the specific language governing rights and limitations under the
  * License.
  *
- * The Creators of Prime are:
- *  Yair Amir, Jonathan Kirsch, and John Lane.
+ * Creators:
+ *   Yair Amir            yairamir@cs.jhu.edu
+ *   Jonathan Kirsch      jak@cs.jhu.edu
+ *   John Lane            johnlane@cs.jhu.edu
+ *   Marco Platania       platania@cs.jhu.edu
  *
- * Special thanks to Brian Coan for major contributions to the design of
- * the Prime algorithm. 
- *  	
- * Copyright (c) 2008 - 2013 
+ * Major Contributors:
+ *   Brian Coan           Design of the Prime algorithm
+ *   Jeff Seibert         View Change protocol
+ *
+ * Copyright (c) 2008 - 2014
  * The Johns Hopkins University.
  * All rights reserved.
  *
- * Major Contributor(s):
- * --------------------
- *     Jeff Seibert
+ * Partial funding for Prime research was provided by the Defense Advanced
+ * Research Projects Agency (DARPA) and The National Security Agency (NSA).
+ * Prime is not necessarily endorsed by DARPA or the NSA.
  *
  */
 
@@ -36,17 +40,17 @@
 
 /*---------------------System-wide Configuration Settings-------------------*/
 
-/* PRIME for 4 server configuration */
+/* PRIME for 7 server configuration */
 
 /* Maximum number of tolerated faults */
-#define NUM_FAULTS  1
+#define NUM_FAULTS 2
 
 /* Total number of servers in the system.  NUM_SERVERS must be greater
  * than or equal to (3*NUM_FAULTS + 1) */
-#define NUM_SERVERS 4
+#define NUM_SERVERS 7
 
 /* Maximum number of clients */
-#define NUM_CLIENTS 10
+#define NUM_CLIENTS 1
 
 /* Number of bytes in a client update */
 #define UPDATE_SIZE 200
@@ -54,7 +58,7 @@
 /* When running a benchmark, this value indicates how many updates
  * should be executed by the servers before stopping and outputting
  * the throughput. */
-#define BENCHMARK_END_RUN 1000
+#define BENCHMARK_END_RUN 3000
 
 /* Set this to 1 if an erasure encoding library is available and
  * integrated. By default, no erasure encoding is used and each
@@ -63,9 +67,22 @@
 #define USE_ERASURE_CODES 0
 
 /* Variability constant K_Lat */
-
 #define VARIABILITY_KLAT 10.0
 
+/* Recovery: set this to 1 to allow recovery. Garbage collection
+ * is disabled.  */
+#define RECOVERY 1
+
+/* Define the maximum number of data blocks that we transfer at the
+ * same time. */
+#define STATE_TRANSFER_MAX_LIMIT 5
+
+/* Define the size of each data block (default: 1 megabyte). */
+#define BLOCK_SIZE 1048576
+
+/* The maximum number of bytes that are sent in each state transfer
+ * message. */
+#define PAYLOAD_SIZE 1024
 
 /*--------------------Networking Settings-----------------------------------*/
 
@@ -105,14 +122,14 @@
  * value. */
 #define SIG_SEC  0
 #define SIG_USEC 1000
-#define SIG_THRESHOLD  128
+#define SIG_THRESHOLD  16
 
 /* This is the maximum number of Merkle tree digests that may be
  * appended to a given message.  This value is dependent on
  * SIG_THRESHOLD: for example, setting SIG_THRESHOLD to 128 (2^7)
  * ensures that at most 7 digests will be appended.  Don't raise
  * SIG_THRESHOLD without raising this value! */
-#define MAX_MERKLE_DIGESTS 7
+#define MAX_MERKLE_DIGESTS 4
 
 /*---------------------------Throttling Settings----------------------------*/
 
@@ -166,13 +183,13 @@
 #define SUSPECT_PING_USEC 0
 
 /* How often do we send turn-around-time measure messages ? */
-#define SUSPECT_TAT_MEASURE_SEC 0
+#define SUSPECT_TAT_MEASURE_SEC  0
 #define SUSPECT_TAT_MEASURE_USEC 500000
 
-#define SUSPECT_TAT_UB_SEC 1
+#define SUSPECT_TAT_UB_SEC  1
 #define SUSPECT_TAT_UB_USEC 0
 
-#define SUSPECT_LEADER_SEC 0
+#define SUSPECT_LEADER_SEC  0
 #define SUSPECT_LEADER_USEC 500000
 
 /* These flags control which PO messages are sent periodically.  Set
@@ -228,7 +245,7 @@
 
 //JCS: I increased the max packet size so that PC_Set messages could be sent in a single UDP message. We may want to change this if doing WAN experiments, if network can't handle such big UDP packets, or if using more than 4 servers. If so, will most likely need to implement a service that runs right on top of UDP that does something like fragmentation.
 
-#define PRIME_MAX_PACKET_SIZE      2500 //2000 //1472 
+#define PRIME_MAX_PACKET_SIZE      5000 //2500 1472 2000 
 #define NUM_SERVER_SLOTS           (NUM_SERVERS+1)
 
 /* We store two additional pieces of information, each an integer, in
@@ -257,6 +274,6 @@
  * below adjusts the maximum number of messages that will be read
  * during any one poll. If no message is available, we stop polling
  * immediately and return to the main event loop. See util/events.c */
-#define POLL_NON_LOW_PRIORITY_THRESHOLD 3000
+#define POLL_NON_LOW_PRIORITY_THRESHOLD 30000
 
 #endif

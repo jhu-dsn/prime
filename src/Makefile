@@ -21,17 +21,14 @@
 # Special thanks to Brian Coan for major contributions to the design of
 # the Prime algorithm. 
 #  	
-# Copyright (c) 2008 - 2013 
+# Copyright (c) 2008 - 2010 
 # The Johns Hopkins University.
 # All rights reserved.
 #
-# Major Contributor(s):
-# --------------------
-#     Jeff Seibert
-#
 
-INC = -I ../stdutil/src 
+INC = -I ../stdutil/src -I ../libspread-util/include -I ../libspread-util/src 
 STDUTIL_LIB = ../stdutil/lib/libstdutil.a
+LIBSPREAD_UTIL = ../libspread-util/lib/libspread-util.a
 
 # location of the OpenTC threshold cryptography library
 TC_LIB = ../OpenTC-1.1/TC-lib-1.0/.libs/libTC.a
@@ -43,31 +40,29 @@ TC_LIB = ../OpenTC-1.1/TC-lib-1.0/.libs/libTC.a
 # system is set up not to use Spines.  In order to use Spines,
 # download and compile it, and place it at Prime/spines.  Then
 # uncomment the following two lines.
-# SPINES = -DSET_USE_SPINES 
-# SPINES_LIB = ../spines/libspines.a
+#SPINES = -DSET_USE_SPINES 
+#SPINES_LIB = ../spines/libspines.a
 
 CC = gcc
-CFLAGS = -g -O2 -Wall $(SPINES) $(INC) 
-
-UTIL_OBJ = util/alarm.o util/events.o util/memory.o util/data_link.o
+CFLAGS = -g -O2 -Wall -D_FILE_OFFSET_BITS=64 $(SPINES) $(INC)  
 
 WRAPPER_OBJ = error_wrapper.o openssl_rsa.o
 
 SERVER_OBJ = srv.o data_structs.o utility.o network.o pre_order.o \
-	util_dll.o validate.o apply.o dispatcher.o packets.o order.o \
+	util_dll.o validate.o apply.o dispatcher.o packets.o proactive_recovery.o order.o \
 	signature.o tcp_wrapper.o merkle.o suspect_leader.o \
 	reliable_broadcast.o view_change.o \
-	erasure.o recon.o tc_wrapper.o $(UTIL_OBJ) $(WRAPPER_OBJ)
+	erasure.o recon.o tc_wrapper.o $(WRAPPER_OBJ)
 
 CLIENT_OBJ = client.o data_structs.o utility.o pre_order.o util_dll.o \
-	packets.o apply.o dispatcher.o order.o suspect_leader.o\
+	packets.o apply.o dispatcher.o proactive_recovery.o order.o suspect_leader.o\
 	reliable_broadcast.o view_change.o \
 	signature.o tcp_wrapper.o erasure.o validate.o \
-	merkle.o recon.o tc_wrapper.o $(UTIL_OBJ) $(WRAPPER_OBJ)
+	merkle.o recon.o tc_wrapper.o $(WRAPPER_OBJ)
 
-GEN_KEYS_OBJ = openssl_rsa.o generate_keys.o tc_wrapper.o $(UTIL_OBJ)
+GEN_KEYS_OBJ = openssl_rsa.o generate_keys.o tc_wrapper.o
 
-all: $(TC_LIB) $(STDUTIL_LIB) server client gen_keys 
+all: $(TC_LIB) $(STDUTIL_LIB) $(LIBSPREAD_UTIL) server client gen_keys 
 
 $(TC_LIB):
 	cd ../OpenTC-1.1/TC-lib-1.0/; ./configure; make
@@ -75,14 +70,17 @@ $(TC_LIB):
 $(STDUTIL_LIB):
 	cd ../stdutil; make
 
+$(LIBSPREAD_UTIL):
+	cd ../libspread-util; ./configure; make
+
 gen_keys: $(GEN_KEYS_OBJ)
-	$(CC) $(CFLAGS) -o ../bin/gen_keys $(GEN_KEYS_OBJ) $(TC_LIB) -lcrypto 
+	$(CC) $(CFLAGS) -o ../bin/gen_keys $(GEN_KEYS_OBJ) $(TC_LIB) $(LIBSPREAD_UTIL) -lcrypto -lrt
 
 server: $(SERVER_OBJ)
-	$(CC) $(CFLAGS) -o ../bin/server $(SERVER_OBJ) $(TC_LIB) $(STDUTIL_LIB) $(SPINES_LIB) -lm -lcrypto -lpthread 
+	$(CC) $(CFLAGS) -o ../bin/server $(SERVER_OBJ) $(TC_LIB) $(STDUTIL_LIB) $(LIBSPREAD_UTIL) $(SPINES_LIB) -lm -lcrypto -lpthread -lrt
 
 client: $(CLIENT_OBJ)
-	$(CC) -o ../bin/client $(CLIENT_OBJ) $(TC_LIB) $(STDUTIL_LIB) $(SPINES_LIB) -lm -lcrypto -lpthread 
+	$(CC) -o ../bin/client $(CLIENT_OBJ) $(TC_LIB) $(STDUTIL_LIB) $(LIBSPREAD_UTIL) $(SPINES_LIB) -lm -lcrypto -lpthread -lrt 
 
 %.o:	%.c
 	$(CC) $(CFLAGS) -c -o $*.o $*.c
@@ -90,8 +88,6 @@ client: $(CLIENT_OBJ)
 clean:
 	rm -f *~
 	rm -f *.o
-	rm -f util/*~
-	rm -f util/*.o
 	rm -f core*
 	rm -f ../bin/server
 	rm -f ../bin/client
@@ -101,6 +97,7 @@ clean:
 # and client latency files
 cleaner: clean
 	cd ../stdutil; make distclean
+#	cd ../libspread-util; make distclean
 	cd ../OpenTC-1.1/TC-lib-1.0/; make distclean
 	cd ../bin; rm -f state_machine_out.*.log
 	cd ../bin; rm -rf prime7sLog-*/

@@ -53,7 +53,8 @@
  * POSSIBILITY OF SUCH DAMAGE.
  * ====================================================================
  *
- * Prime was partially funded by a grant from the National Science 
- * Foundation to Johns Hopkins University. The U.S. Government retains 
- * certain rights in this software.
+ * Partial funding for Prime research was provided by the Defense Advanced
+ * Research Projects Agency (DARPA) and The National Security Agency (NSA) 
+ * to Johns Hopkins University. The U.S. Government retains certain rights 
+ * in this software.
  */

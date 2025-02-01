@@ -15,19 +15,23 @@
  * for the specific language governing rights and limitations under the 
  * License.
  *
- * The Creators of Prime are:
- *  Yair Amir, Jonathan Kirsch, and John Lane.
+ * Creators:
+ *   Yair Amir            yairamir@cs.jhu.edu
+ *   Jonathan Kirsch      jak@cs.jhu.edu
+ *   John Lane            johnlane@cs.jhu.edu
+ *   Marco Platania       platania@cs.jhu.edu
  *
- * Special thanks to Brian Coan for major contributions to the design of
- * the Prime algorithm. 
- *  	
- * Copyright (c) 2008 - 2013 
+ * Major Contributors:
+ *   Brian Coan           Design of the Prime algorithm
+ *   Jeff Seibert         View Change protocol
+ *
+ * Copyright (c) 2008 - 2014
  * The Johns Hopkins University.
  * All rights reserved.
- * 
- * Major Contributor(s):
- * --------------------
- *     Jeff Seibert
+ *
+ * Partial funding for Prime research was provided by the Defense Advanced
+ * Research Projects Agency (DARPA) and The National Security Agency (NSA).
+ * Prime is not necessarily endorsed by DARPA or the NSA.
  *
  */
 
@@ -38,8 +42,8 @@
 #include <stdlib.h>
 #include "data_structs.h"
 #include "apply.h"
-#include "util/memory.h"
-#include "util/alarm.h"
+#include "spu_memory.h"
+#include "spu_alarm.h"
 #include "error_wrapper.h"
 #include "utility.h"
 #include "order.h"
@@ -92,6 +96,10 @@ int32u APPLY_Commit_Matches_Pre_Prepare(signed_message *commit,
 /* Apply a signed message to the data structures. */
 void APPLY_Message_To_Data_Structs(signed_message *mess) 
 {
+
+  /* Does not process any message during recovery*/
+  if(DATA.recovery_in_progress == 1 && mess->type != NEW_LEADER && mess->type != NEW_LEADER_PROOF)
+    return;
 
   switch (mess->type) {   
 
@@ -185,39 +193,72 @@ void APPLY_Message_To_Data_Structs(signed_message *mess)
     break;
 
   case REPORT:
+    if(DATA.buffering_during_recovery == 1)
+      return;
     APPLY_Report(mess);
     break;
 
   case PC_SET:
+    if(DATA.buffering_during_recovery == 1)
+      return;
     APPLY_PC_Set(mess);
     break;
 
   case VC_LIST:
+    if(DATA.buffering_during_recovery == 1)
+      return;
     APPLY_VC_List(mess);
     break;
 
   case VC_PARTIAL_SIG:
+    if(DATA.buffering_during_recovery == 1)
+      return;
     APPLY_VC_Partial_Sig(mess);
     break;
 
   case VC_PROOF:
+    if(DATA.buffering_during_recovery == 1)
+      return;
     APPLY_VC_Proof(mess);
     break;
 
   case REPLAY:
+    if(DATA.buffering_during_recovery == 1)
+      return;
     APPLY_Replay(mess);
     break;
 
   case REPLAY_PREPARE:
+    if(DATA.buffering_during_recovery == 1)
+      return;
     APPLY_Replay_Prepare(mess);
     break;
 
   case REPLAY_COMMIT:
+    if(DATA.buffering_during_recovery == 1)
+      return;
     APPLY_Replay_Commit(mess);
     break;
 
   case RECON:
+    if(DATA.buffering_during_recovery == 1)
+      return;
     APPLY_Recon(mess);
+    break;
+
+  case ORD_CERT:
+  case ORD_CERT_REPLY:
+  case PO_CERT:
+  case PO_CERT_REPLY:
+  case DB_STATE_DIGEST_REQUEST:
+  case DB_STATE_DIGEST_REPLY:
+  case DB_STATE_VALIDATION_REQUEST:
+  case DB_STATE_VALIDATION_REPLY:
+  case DB_STATE_TRANSFER_REQUEST:
+  case DB_STATE_TRANSFER_REPLY:
+  case CATCH_UP:
+  case CATCH_UP_REPLY:
+  /* Nothing to do here */
     break;
 
   default:
@@ -271,7 +312,7 @@ void APPLY_PO_Request(signed_message *po_request)
   PRE_ORDER_Update_ARU();
 
   slot->num_events = po_request_specific->num_events;
-
+  slot->executed = 0;
   /* See if we were missing this PO-Request when it became eligible for
    * local execution.  If so, mark that we have it.  Then, if this means
    * we can execute the next global sequence number, try. */
@@ -337,6 +378,13 @@ void APPLY_PO_Ack(signed_message *po_ack)
     if(!slot->ack_received[po_ack->machine_id]) {
       slot->ack_received[po_ack->machine_id] = TRUE;
       slot->ack_count++;
+      /* We store received PO-ACKs in the po_slot for proactive recovery */
+      #if RECOVERY
+      if(slot->po_ack[po_ack->machine_id] == NULL) {
+         inc_ref_cnt(po_ack);
+         slot->po_ack[po_ack->machine_id] = po_ack;
+      }
+      #endif
     }
   }
 }
@@ -363,12 +411,13 @@ void APPLY_PO_ARU(signed_message *po_aru)
 
   int32u check = 1;
 
-  if (num < prev_num) {
-      check = 0;
-  }
+  if (num < prev_num)
+    check = 0;
+
   for (i = 0; i < NUM_SERVERS; ++i) {
     if (cur->cum_ack.ack_for_server[i] < prev->cum_ack.ack_for_server[i]) {
-	check = 0;
+      check = 0;
+      break;
     }
   }
 
@@ -468,8 +517,8 @@ void APPLY_Pre_Prepare (signed_message *mess)
 		(byte *)(pre_prepare_specific + 1),
 		sizeof(po_aru_signed_message) *
 		pre_prepare_specific->num_acks_in_this_message);
-
-	slot->num_parts_collected++;
+	
+        slot->num_parts_collected++;
 
 	if(slot->num_parts_collected == slot->total_parts) {
 
@@ -866,7 +915,8 @@ void APPLY_New_Leader (signed_message *mess) {
 	if (DATA.SUS.new_leader_count > 2*VAR.Faults) {
 	    Alarm(PRINT, "view change from %d to %d\n", DATA.View, new_leader->new_view);
 	    DATA.View = new_leader->new_view;
-	    DATA.preinstall = 1;
+	    if(DATA.recovery_in_progress == 0 && DATA.buffering_during_recovery == 0)
+              DATA.preinstall = 1;
 	    DATA.SUS.sent_proof = 0;
             if (UTIL_I_Am_Leader()) {
                 Alarm(PRINT, "I AM THE NEW LEADER\n\n");
@@ -876,7 +926,6 @@ void APPLY_New_Leader (signed_message *mess) {
             }
 	}
     }
-
 }
 
 void APPLY_New_Leader_Proof (signed_message *mess) {
@@ -891,7 +940,6 @@ void APPLY_New_Leader_Proof (signed_message *mess) {
 	new_leader = (signed_message*)((char*)new_leader + UTIL_Message_Size(new_leader));
 	count++;
     }
-
 }
 
 void APPLY_RB_Init (signed_message *mess) {
@@ -907,8 +955,6 @@ void APPLY_RB_Init (signed_message *mess) {
 	DATA.REL.rb_echo[payload->machine_id][i] = 0;
 	DATA.REL.rb_ready[payload->machine_id][i] = 0;
     }
-
-
 }
 
 void APPLY_RB_Echo (signed_message *mess) {
@@ -967,6 +1013,7 @@ void APPLY_Report (signed_message *mess) {
 
 void APPLY_PC_Set (signed_message *mess) {
     //pc_set_message *pc_set = (pc_set_message*)(mess+1);
+    //TODO: Should we check to make sure each pc is distinct?
     Alarm(DEBUG, "Applying PC_Set %d %d\n", mess->machine_id, DATA.VIEW.pc_set[mess->machine_id]);
     report_message *report = &DATA.VIEW.report[mess->machine_id];
     UTIL_DLL_Add_Data(&DATA.VIEW.pc_set[mess->machine_id], mess);
@@ -1017,7 +1064,6 @@ void APPLY_Replay (signed_message *mess) {
     if (count >= 2*VAR.Faults) {
 	DATA.VIEW.prepare_ready = 1;
     }
-
 }
 
 void APPLY_Replay_Prepare (signed_message *mess) {
@@ -1038,7 +1084,6 @@ void APPLY_Replay_Prepare (signed_message *mess) {
     if (count > 2*VAR.Faults) {
 	DATA.VIEW.prepare_ready = 1;
     }
-
 }
 
 void APPLY_Replay_Commit (signed_message *mess) {

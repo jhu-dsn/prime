@@ -1,6 +1,7 @@
+
 /*
  * Prime.
- *     
+ *
  * The contents of this file are subject to the Prime Open-Source
  * License, Version 1.0 (the ``License''); you may not use
  * this file except in compliance with the License.  You may obtain a
@@ -10,24 +11,28 @@
  *
  * or in the file ``LICENSE.txt'' found in this distribution.
  *
- * Software distributed under the License is distributed on an AS IS basis, 
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License 
- * for the specific language governing rights and limitations under the 
+ * Software distributed under the License is distributed on an AS IS basis,
+ * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
+ * for the specific language governing rights and limitations under the
  * License.
  *
- * The Creators of Prime are:
- *  Yair Amir, Jonathan Kirsch, and John Lane.
+ * Creators:
+ *   Yair Amir            yairamir@cs.jhu.edu
+ *   Jonathan Kirsch      jak@cs.jhu.edu
+ *   John Lane            johnlane@cs.jhu.edu
+ *   Marco Platania       platania@cs.jhu.edu
  *
- * Special thanks to Brian Coan for major contributions to the design of
- * the Prime algorithm. 
- *  	
- * Copyright (c) 2008 - 2013 
+ * Major Contributors:
+ *   Brian Coan           Design of the Prime algorithm
+ *   Jeff Seibert         View Change protocol
+ *
+ * Copyright (c) 2008 - 2014
  * The Johns Hopkins University.
  * All rights reserved.
  *
- * Major Contributor(s):
- * --------------------
- *     Jeff Seibert
+ * Partial funding for Prime research was provided by the Defense Advanced
+ * Research Projects Agency (DARPA) and The National Security Agency (NSA).
+ * Prime is not necessarily endorsed by DARPA or the NSA.
  *
  */
 
@@ -37,11 +42,11 @@
 #include <netdb.h>
 #include <assert.h>
 #include <signal.h>
-#include "util/arch.h"
-#include "util/alarm.h"
-#include "util/sp_events.h"
-#include "util/memory.h"
-#include "util/data_link.h"
+#include "arch.h"
+#include "spu_alarm.h"
+#include "spu_events.h"
+#include "spu_memory.h"
+#include "spu_data_link.h"
 #include "net_types.h"
 #include "objects.h"
 #include "network.h"
@@ -63,7 +68,7 @@
 #define PRINT_INTERVAL NUM_CLIENTS_TO_EMULATE
 
 /* This sets the maximum number of updates a client can submit */
-#define MAX_ACTIONS 100000 
+#define MAX_ACTIONS BENCHMARK_END_RUN
 
 /* Local Functions */
 void Usage(int argc, char **argv);
@@ -107,6 +112,7 @@ util_stopwatch latency_sw;
 signed_message *pending_update;
 double Latencies[MAX_ACTIONS];
 FILE *fp;
+int32 num_of_updates = 0;
 
 void clean_exit(int signum)
 {
@@ -117,16 +123,54 @@ void clean_exit(int signum)
 
 int main(int argc, char** argv) 
 {
+
+  Alarm(PRINT, "\n");
+  Alarm(PRINT, "/===========================================================================\\\n");
+  Alarm(PRINT, "|                                                                           |\n");
+  Alarm(PRINT, "| Prime.                                                                    |\n");
+  Alarm(PRINT, "|                                                                           |\n");
+  Alarm(PRINT, "| The contents of this file are subject to the Prime Open-Source            |\n");
+  Alarm(PRINT, "| License, Version 1.0 (the ''License''); you may not use                   |\n");
+  Alarm(PRINT, "| this file except in compliance with the License.  You may obtain a        |\n");
+  Alarm(PRINT, "| copy of the License at:                                                   |\n");
+  Alarm(PRINT, "|                                                                           |\n");
+  Alarm(PRINT, "| http://www.dsn.jhu.edu/byzrep/prime/LICENSE.txt                           |\n");
+  Alarm(PRINT, "|                                                                           |\n");
+  Alarm(PRINT, "| Software distributed under the License is distributed on an AS IS basis,  |\n");
+  Alarm(PRINT, "| WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License  |\n");
+  Alarm(PRINT, "| for the specific language governing rights and limitations under the      |\n");
+  Alarm(PRINT, "| License.                                                                  |\n");
+  Alarm(PRINT, "|                                                                           |\n");
+  Alarm(PRINT, "| Creators:                                                                 |\n");
+  Alarm(PRINT, "|  Yair Amir            yairamir@cs.jhu.edu                                 |\n");
+  Alarm(PRINT, "|  Jonathan Kirsch      jak@cs.jhu.edu                                      |\n");
+  Alarm(PRINT, "|  John Lane            johnlane@cs.jhu.edu                                 |\n");
+  Alarm(PRINT, "|  Marco Platania       platania@cs.jhu.edu                                 |\n");
+  Alarm(PRINT, "|                                                                           |\n");
+  Alarm(PRINT, "| Major Contributors:                                                       |\n");
+  Alarm(PRINT, "|  Brian Coan           Design of the Prime algorithm                       |\n");
+  Alarm(PRINT, "|  Jeff Seibert         View Change protocol                                |\n");
+  Alarm(PRINT, "|                                                                           |\n");
+  Alarm(PRINT, "| Copyright (c) 2008 - 2014                                                 |\n");
+  Alarm(PRINT, "| The Johns Hopkins University.                                             |\n");
+  Alarm(PRINT, "| All rights reserved.                                                      |\n");
+  Alarm(PRINT, "|                                                                           |\n");
+  Alarm(PRINT, "| Partial funding for Prime research was provided by the Defense Advanced   |\n");
+  Alarm(PRINT, "| Research Projects Agency (DARPA) and The National Security Agency (NSA).  |\n");
+  Alarm(PRINT, "| Prime is not necessarily endorsed by DARPA or the NSA.                    |\n");
+  Alarm(PRINT, "|                                                                           |\n");
+  Alarm(PRINT, "\\===========================================================================/\n\n");
+
   char buf[128];
 
   Usage(argc, argv);
-  Alarm_set(PRINT | CLIENT_PRINT);
+  Alarm_set_types(PRINT);
 
-  NET.program_type = NET_CLIENT_PROGRAM_TYPE;  
+  NET.program_type = NET_CLIENT_PROGRAM_TYPE;
   update_count     = 0;
   time_stamp       = 0;
   total_time       = 0;
-  
+
   UTIL_Load_Addresses(); 
 
   E_init(); 
@@ -163,8 +207,8 @@ int main(int argc, char** argv)
 void Init_Memory_Objects(void)
 {
   /* Initialize memory object types  */
-  Mem_init_object_abort(PACK_BODY_OBJ, sizeof(packet),      100, 1);
-  Mem_init_object_abort(SYS_SCATTER,   sizeof(sys_scatter), 100, 1);
+  Mem_init_object_abort(PACK_BODY_OBJ, "packet",      sizeof(packet),      100, 1);
+  Mem_init_object_abort(SYS_SCATTER,   "sys_scatter", sizeof(sys_scatter), 100, 1);
 }
 
 void Usage(int argc, char **argv)
@@ -373,7 +417,7 @@ void Net_Cli_Recv(channel sk, int dummy, void *dummy_p)
   /* Validate the client response */
   if(!Validate_Message((signed_message*)srv_recv_scat.elements[0].buf, 
 		       received_bytes)) {
-    Alarm(PRINT,"CLIENT VALIDATION FAILURE\n");
+    Alarm(DEBUG,"CLIENT VALIDATION FAILURE\n");
     return;
   }
 
@@ -446,7 +490,15 @@ void Process_Message( signed_message *mess, int32u num_bytes )
     Alarm(PRINT, "%d\t%f\n", response_specific->seq_num, time);
   
   num_outstanding_updates--;
-  Send_Update(0, NULL);
+  /* Marco 5/14/2014: send a message for each emulated client */
+  if(num_of_updates < MAX_ACTIONS)
+    Send_Update(0, NULL);
+  else {
+    sleep(3);
+    CLIENT_Cleanup();
+  }
+  /* end */
+
   return;
 }
 
@@ -470,6 +522,7 @@ void Send_Update(int dummy, void *dummyp)
   int ret;
 
   while(num_outstanding_updates < NUM_CLIENTS_TO_EMULATE) {
+    num_of_updates++;
 
     /* Build a new update */
     update             = UTIL_New_Signed_Message();

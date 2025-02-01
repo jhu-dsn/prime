@@ -1,6 +1,6 @@
 /*
  * Prime.
- *     
+ *
  * The contents of this file are subject to the Prime Open-Source
  * License, Version 1.0 (the ``License''); you may not use
  * this file except in compliance with the License.  You may obtain a
@@ -10,24 +10,28 @@
  *
  * or in the file ``LICENSE.txt'' found in this distribution.
  *
- * Software distributed under the License is distributed on an AS IS basis, 
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License 
- * for the specific language governing rights and limitations under the 
+ * Software distributed under the License is distributed on an AS IS basis,
+ * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
+ * for the specific language governing rights and limitations under the
  * License.
  *
- * The Creators of Prime are:
- *  Yair Amir, Jonathan Kirsch, and John Lane.
+ * Creators:
+ *   Yair Amir            yairamir@cs.jhu.edu
+ *   Jonathan Kirsch      jak@cs.jhu.edu
+ *   John Lane            johnlane@cs.jhu.edu
+ *   Marco Platania       platania@cs.jhu.edu
  *
- * Special thanks to Brian Coan for major contributions to the design of
- * the Prime algorithm. 
- *  	
- * Copyright (c) 2008 - 2013 
+ * Major Contributors:
+ *   Brian Coan           Design of the Prime algorithm
+ *   Jeff Seibert         View Change protocol
+ *
+ * Copyright (c) 2008 - 2014
  * The Johns Hopkins University.
  * All rights reserved.
  *
- * Major Contributor(s):
- * --------------------
- *     Jeff Seibert
+ * Partial funding for Prime research was provided by the Defense Advanced
+ * Research Projects Agency (DARPA) and The National Security Agency (NSA).
+ * Prime is not necessarily endorsed by DARPA or the NSA.
  *
  */
 
@@ -40,11 +44,11 @@
 #include <unistd.h>
 #include <netinet/in.h>
 #include <assert.h>
-#include "util/arch.h"
-#include "util/alarm.h"
-#include "util/sp_events.h"
-#include "util/data_link.h"
-#include "util/memory.h"
+#include "arch.h"
+#include "spu_alarm.h"
+#include "spu_events.h"
+#include "spu_data_link.h"
+#include "spu_memory.h"
 #include "objects.h"
 #include "net_types.h"
 #include "data_structs.h"
@@ -181,6 +185,7 @@ void Initialize_UDP_Sockets()
   NET.Recon_Channel = DL_init_channel(SEND_CHANNEL | RECV_CHANNEL,
 				      NET.Recon_Port, 0, 0);
 
+#ifndef SET_USE_SPINES
   /* Maximize the size of the buffers on each socket */
   max_rcv_buff(NET.Bounded_Channel);
   max_rcv_buff(NET.Timely_Channel);
@@ -198,6 +203,7 @@ void Initialize_UDP_Sockets()
 
   E_attach_fd(NET.Recon_Channel, READ_FD, Net_Srv_Recv, 
 	      UDP_SOURCE, NULL, MEDIUM_PRIORITY); 
+#endif
 
   if(USE_IP_MULTICAST) {
 
@@ -377,7 +383,7 @@ void Initialize_Spines()
   spines_addr.sin_addr.s_addr = 
     htonl(UTIL_Get_Server_Spines_Address(VAR.My_Server_ID));
     
-  Alarm(NET_PRINT, "%d Init Spines... "IPF"\n", VAR.My_Server_ID, 
+  Alarm(DEBUG, "%d Init Spines... "IPF"\n", VAR.My_Server_ID, 
 	IP(ntohl(spines_addr.sin_addr.s_addr)));
   
   /* Connect to spines */
@@ -389,10 +395,12 @@ void Initialize_Spines()
   // y = {0,1,2}
   //   - shortest path routing
   //   - priority flooding
-  //   - reliable flooding 
+  //   - reliable flooding
+  // Intusion-tolerant Spines: x = 8, y = 2
+  // Spines 4.0: x = 1, y = 0 
   protocol = 8 | (2 << 8);
   spines_recv_sk = spines_socket(PF_SPINES, SOCK_DGRAM, protocol, 
-                 (struct sockaddr *)&spines_addr);
+				 (struct sockaddr *)&spines_addr);
 
   if(spines_recv_sk == -1) {
     Alarm(PRINT, "%d Could not connect to Spines daemon.\n", VAR.My_Server_ID );
@@ -400,6 +408,7 @@ void Initialize_Spines()
   } 
 
   /* Set the buffer size of the socket */
+  Alarm(PRINT, "Spines channel: ");
   max_rcv_buff(spines_recv_sk);
   max_snd_buff(spines_recv_sk);
 
@@ -433,7 +442,7 @@ void Net_Srv_Recv(channel sk, int source, void *dummy_p)
 
   /* Read the packet from the socket */
   if(source == UDP_SOURCE)
-    received_bytes = DL_recv(sk, &srv_recv_scat);  
+    received_bytes = DL_recv(sk, &srv_recv_scat);
 #ifdef SET_USE_SPINES
   else if(source == SPINES_SOURCE) {
     received_bytes = spines_recvfrom(sk, srv_recv_scat.elements[0].buf, 
@@ -468,7 +477,7 @@ void Net_Srv_Recv(channel sk, int source, void *dummy_p)
 
   if(source == TCP_SOURCE) {
     assert(mess->type == UPDATE);
-    
+
     /* Store the socket so we know how to send a response */
     if(NET.client_sd[mess->machine_id] == 0)
       NET.client_sd[mess->machine_id] = sk;
@@ -476,9 +485,10 @@ void Net_Srv_Recv(channel sk, int source, void *dummy_p)
 
   /* 1) Validate the Packet.  If the message does not validate, drop it. */
   if (!VAL_Validate_Message(mess, received_bytes)) {
-    Alarm(PRINT, "VALIDATE FAILED for type %d\n", mess->type);
+    Alarm(DEBUG, "VALIDATE FAILED for type %d from server %d\n", mess->type, mess->machine_id);
     return;
   }
+
   /* No Conflict, Apply the message to our data structures. */
   APPLY_Message_To_Data_Structs(mess);
   /* Now dispatch the mesage so that is will be processed by the
@@ -518,8 +528,8 @@ int max_rcv_buff(int sk)
   /* Increasing the buffer on the socket */
   int i, val, ret;
   unsigned int lenval;
-
-  for(i=10; i <= 3000; i+=5) {
+  
+  for(i=10; i <= 300000; i+=5) {
     val = 1024*i;
     ret = setsockopt(sk, SOL_SOCKET, SO_RCVBUF, (void *)&val, sizeof(val));
     if (ret < 0)
@@ -530,6 +540,7 @@ int max_rcv_buff(int sk)
       break;
   }
   return(1024*(i-5));
+
 }
 
 int max_snd_buff(int sk)
@@ -538,7 +549,7 @@ int max_snd_buff(int sk)
   int i, val, ret;
   unsigned int lenval;
 
-  for(i=10; i <= 3000; i+=5) {
+  for(i=10; i <= 300000; i+=5) {
     val = 1024*i;
     ret = setsockopt(sk, SOL_SOCKET, SO_SNDBUF, (void *)&val, sizeof(val));
     if (ret < 0)

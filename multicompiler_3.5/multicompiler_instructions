@@ -1,0 +1,36 @@
+This file provides instruction to install the MultiCompiler 3.5 on Ubuntu and use it to compile Prime 2.0.
+For information about the MultiCompiler please visit https://ssllab.org/trac/wiki/MultiCompilerPublic
+For the latest releases of the MultiCompiler please visit https://github.com/securesystemslab/
+This folder also contains make_many.sh, a script to generate multiple versions of Prime replicas.
+
+DEPENDENCIES
+============
+Install python and binutils libraries: sudo apt-get install python binutils
+
+BCLANG
+======
+bclang is a script written in Python to compile an application from its bitcode.
+Copy bclang in /usr/local/bin: sudo cp bclang /usr/local/bin
+Make bclang executable: sudo chmod +x /usr/local/bin/bclang
+Create symlink bclang++ that points to bclang in same directory: sudo ln -s /usr/local/bin/bclang /usr/local/bin/bclang++
+
+MULTICOMPILER
+==============
+Configure: ./configure --enable-targets=x86,x86_64 --enable-optimized --prefix=/usr/local
+Build: make
+Install: make install
+
+BUILDING A PROJECT
+==================
+Projects should be kept in /home/`user`/workspace/`project`
+The bitcode cache is kept in /home/`user`/workspace/bcache/`project`
+Deleting that folder empties the cache
+
+HOW TO COMPILE PRIME
+====================
+Before compiling Prime, it is necessary to replace the Makefile in Prime/src with the one in this folder. 
+export CC="bclang"
+export CFLAGS="-frandom-seed=12345678 -fdiversify" (for additional CFLAGS options see llvm/README.md)
+make
+
+You can use make_many.sh to automate the compilation process.

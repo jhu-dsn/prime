@@ -1,6 +1,6 @@
 /*
  * Prime.
- *     
+ *
  * The contents of this file are subject to the Prime Open-Source
  * License, Version 1.0 (the ``License''); you may not use
  * this file except in compliance with the License.  You may obtain a
@@ -10,33 +10,37 @@
  *
  * or in the file ``LICENSE.txt'' found in this distribution.
  *
- * Software distributed under the License is distributed on an AS IS basis, 
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License 
- * for the specific language governing rights and limitations under the 
+ * Software distributed under the License is distributed on an AS IS basis,
+ * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
+ * for the specific language governing rights and limitations under the
  * License.
  *
- * The Creators of Prime are:
- *  Yair Amir, Jonathan Kirsch, and John Lane.
+ * Creators:
+ *   Yair Amir            yairamir@cs.jhu.edu
+ *   Jonathan Kirsch      jak@cs.jhu.edu
+ *   John Lane            johnlane@cs.jhu.edu
+ *   Marco Platania       platania@cs.jhu.edu
  *
- * Special thanks to Brian Coan for major contributions to the design of
- * the Prime algorithm. 
- *  	
- * Copyright (c) 2008 - 2013 
+ * Major Contributors:
+ *   Brian Coan           Design of the Prime algorithm
+ *   Jeff Seibert         View Change protocol
+ *
+ * Copyright (c) 2008 - 2014
  * The Johns Hopkins University.
  * All rights reserved.
  *
- * Major Contributor(s):
- * --------------------
- *     Jeff Seibert
+ * Partial funding for Prime research was provided by the Defense Advanced
+ * Research Projects Agency (DARPA) and The National Security Agency (NSA).
+ * Prime is not necessarily endorsed by DARPA or the NSA.
  *
  */
 
 #include <stdlib.h>
 #include <string.h>
 #include <assert.h>
-#include "util/arch.h"
-#include "util/alarm.h"
-#include "util/memory.h"
+#include "arch.h"
+#include "spu_alarm.h"
+#include "spu_memory.h"
 #include "data_structs.h"
 #include "utility.h"
 #include "pre_order.h"
@@ -60,7 +64,6 @@ void   PRE_ORDER_Upon_Receiving_PO_Request  (signed_message *mess);
 void   PRE_ORDER_Upon_Receiving_PO_Ack      (signed_message *mess);
 void   PRE_ORDER_Upon_Receiving_PO_ARU      (signed_message *mess);
 void   PRE_ORDER_Upon_Receiving_Proof_Matrix(signed_message *mess);
-int32u PRE_ORDER_Update_Cum_ARU(void);
 int32u PRE_ORDER_Proof_ARU (int32u server, po_aru_signed_message *proof);
 void   PRE_ORDER_Periodically(int dummy, void *dummyp);
 
@@ -109,9 +112,18 @@ void PRE_ORDER_Dispatcher(signed_message *mess)
 
 void PRE_ORDER_Upon_Receiving_Update(signed_message *update)
 {
+  if(DATA.buffering_during_recovery == 1)
+    return;
+
+  /* Discard duplicated updates */
+  update_message *update_specific;
+  update_specific = (update_message *)(update + 1);
+  if(update_specific->time_stamp <= DATA.PO.client_ts[update->machine_id])
+    return;
+
   /* Add the update to the outgoing po_request list  */
   UTIL_DLL_Add_Data(&DATA.PO.po_request_dll, update);
-    
+
   /* If we're not sending PO-Requests periodically, try to send one
    * right away. */
   if(!SEND_PO_REQUESTS_PERIODICALLY)
@@ -204,6 +216,9 @@ void PRE_ORDER_Send_PO_Ack()
   int32u more_to_ack;
   double time;
 
+  if(DATA.buffering_during_recovery == 1)
+    return;
+
   /* Make sure we don't send an ack if it hasn't been long enough */
   if(SEND_PO_ACKS_PERIODICALLY) {
     UTIL_Stopwatch_Stop(&DATA.PO.po_ack_sw);
@@ -247,13 +262,12 @@ int32u PRE_ORDER_Update_ARU()
 
     while((slot = UTIL_Get_PO_Slot_If_Exists(s, DATA.PO.aru[s]+1))
 	  != NULL){
-      if (slot->po_request == NULL) { 
+      if (slot->po_request == NULL) {
 	/* NULL request -- don't update aru */
 	Alarm(DEBUG,"%d NULL po_request found in slot %d srv %d\n",
 	      VAR.My_Server_ID, DATA.PO.aru[s]+1, s );
 	break;
       }
-
       DATA.PO.aru[s]++; 
       updated = TRUE;
     }
@@ -272,6 +286,9 @@ void PRE_ORDER_Send_PO_ARU()
 {
   signed_message *ack;
   double time;
+
+  if(DATA.buffering_during_recovery == 1)
+    return;
 
   /* Make sure it's been long enough since we last sent a PO-ARU */
   if(SEND_PO_ARU_PERIODICALLY) {
@@ -307,17 +324,15 @@ int32u PRE_ORDER_Update_Cum_ARU()
   /* Attempt to update the pre order cumulative aru for each server */
   
   for (s = 1; s <= NUM_SERVERS; s++) {
-    
     while((slot = UTIL_Get_PO_Slot_If_Exists(s, DATA.PO.cum_aru[s]+1))!= NULL) {
 
       /* Make sure we have the PO Request */
       if(slot->po_request == NULL)
 	break;
 
-      if(slot->ack_count < (2 * NUM_FAULTS + 1)) {
+      if(slot->ack_count < (2 * NUM_FAULTS + 1))
 	/* not enough acks -- don't update aru */
 	break;
-      }
 
       /* Enough acks found for server s*/
       DATA.PO.cum_aru[s]++; 
@@ -330,12 +345,13 @@ int32u PRE_ORDER_Update_Cum_ARU()
 
 void PRE_ORDER_Upon_Receiving_PO_ARU(signed_message *mess)
 {
-  Alarm(DEBUG,"Server: %d, PRE_ORDER Received PO-ARU from %d\n",
-        VAR.My_Server_ID, mess->machine_id );
+  Alarm(DEBUG, "Server: %d, PRE_ORDER Received PO-ARU %d from %d\n",
+        VAR.My_Server_ID, DATA.PO.aru[mess->machine_id], mess->machine_id );
 
   /* If we're not sending the Proof Matrix periodically, then try to
    * send one whenever we receive a new PO-ARU message.  Otherwise,
    * we'll send it periodically in response to a timeout. */
+
   if(!SEND_PROOF_MATRIX_PERIODICALLY && !UTIL_I_Am_Leader())
     PRE_ORDER_Send_Proof_Matrix();
 
@@ -348,6 +364,9 @@ void PRE_ORDER_Send_Proof_Matrix()
   int32u num_parts, i, dest_bits;
   double time;
 
+  if(DATA.buffering_during_recovery == 1)
+    return;
+
   /* Leader does not send proof matrix to itself */
   assert(!UTIL_I_Am_Leader());
 
@@ -359,7 +378,6 @@ void PRE_ORDER_Send_Proof_Matrix()
        (PROOF_MATRIX_PERIOD))
       return;
   }
-
 
   //JCS: Thesis specifies that each correct server should always periodically 
   // send matrix
@@ -419,13 +437,11 @@ int32u PRE_ORDER_Proof_ARU(int32u server, po_aru_signed_message *proof)
   int32u cack[NUM_SERVER_SLOTS];
 
   /* A proof aru */
-
   for (s = 1; s <= NUM_SERVERS; s++)
     cack[s] = proof[s-1].cum_ack.ack_for_server[server-1];
 
   /* sort the values */
   qsort( (void*)(cack+1), NUM_SERVERS, sizeof(int32u), intcmp );
-
   return cack[VAR.Faults + 1];
 }
 

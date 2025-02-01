@@ -1,6 +1,6 @@
 /*
  * Prime.
- *     
+ *
  * The contents of this file are subject to the Prime Open-Source
  * License, Version 1.0 (the ``License''); you may not use
  * this file except in compliance with the License.  You may obtain a
@@ -10,32 +10,36 @@
  *
  * or in the file ``LICENSE.txt'' found in this distribution.
  *
- * Software distributed under the License is distributed on an AS IS basis, 
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License 
- * for the specific language governing rights and limitations under the 
+ * Software distributed under the License is distributed on an AS IS basis,
+ * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
+ * for the specific language governing rights and limitations under the
  * License.
  *
- * The Creators of Prime are:
- *  Yair Amir, Jonathan Kirsch, and John Lane.
+ * Creators:
+ *   Yair Amir            yairamir@cs.jhu.edu
+ *   Jonathan Kirsch      jak@cs.jhu.edu
+ *   John Lane            johnlane@cs.jhu.edu
+ *   Marco Platania       platania@cs.jhu.edu
  *
- * Special thanks to Brian Coan for major contributions to the design of
- * the Prime algorithm. 
- *  	
- * Copyright (c) 2008 - 2013 
+ * Major Contributors:
+ *   Brian Coan           Design of the Prime algorithm
+ *   Jeff Seibert         View Change protocol
+ *
+ * Copyright (c) 2008 - 2014
  * The Johns Hopkins University.
  * All rights reserved.
  *
- * Major Contributor(s):
- * --------------------
- *     Jeff Seibert
+ * Partial funding for Prime research was provided by the Defense Advanced
+ * Research Projects Agency (DARPA) and The National Security Agency (NSA).
+ * Prime is not necessarily endorsed by DARPA or the NSA.
  *
  */
 
 #ifndef PRIME_PACKETS_H
 #define PRIME_PACKETS_H
 
-#include "util/arch.h"
-#include "util/sp_events.h"
+#include "arch.h"
+#include "spu_events.h"
 #include "def.h"
 #include "openssl_rsa.h"
 #include "tc_wrapper.h"
@@ -50,7 +54,12 @@ enum packet_types {DUMMY,
 		   TAT_MEASURE, TAT_UB, NEW_LEADER, NEW_LEADER_PROOF,
 		   RB_INIT, RB_ECHO, RB_READY,
 		   REPORT, PC_SET, VC_LIST, VC_PARTIAL_SIG, VC_PROOF,
-		   REPLAY, REPLAY_PREPARE, REPLAY_COMMIT, LAST_MESSAGE_TYPE};
+		   REPLAY, REPLAY_PREPARE, REPLAY_COMMIT, 
+		   ORD_CERT, ORD_CERT_REPLY, PO_CERT, PO_CERT_REPLY,
+                   DB_STATE_DIGEST_REQUEST, DB_STATE_DIGEST_REPLY,
+                   DB_STATE_VALIDATION_REQUEST, DB_STATE_VALIDATION_REPLY, 
+                   DB_STATE_TRANSFER_REQUEST, DB_STATE_TRANSFER_REPLY, 
+                   CATCH_UP, CATCH_UP_REPLY, LAST_MESSAGE_TYPE};
 
 //typedef byte packet_body[PRIME_MAX_PACKET_SIZE];
 
@@ -252,8 +261,6 @@ typedef struct dummy_replay_prepare {
 typedef struct dummy_replay_commit {
 } replay_commit_message;
 
-
-
 typedef struct dummy_erasure_part {
 
   /* Length of the message this part is encoding, in bytes.  The receiver
@@ -276,7 +283,6 @@ typedef struct dummy_prepare_certificate {
   complete_pre_prepare_message pre_prepare;
   signed_message* prepare[NUM_SERVER_SLOTS]; 
 } prepare_certificate_struct;
-
 
 /* A Commit certificate consists of 2f+1 Commits */
 typedef struct dummy_commit_certificate {
@@ -308,7 +314,6 @@ signed_message* RELIABLE_Construct_RB_Init(signed_message *mess);
 signed_message* RELIABLE_Construct_RB_Echo(signed_message *mess);
 signed_message* RELIABLE_Construct_RB_Ready(signed_message *mess);
 
-
 signed_message* VIEW_Construct_Report(void);
 signed_message* VIEW_Construct_PC_Set(char *cert, int size);
 signed_message* VIEW_Construct_VC_List(void);
@@ -318,7 +323,84 @@ signed_message* VIEW_Construct_Replay(vc_proof_message *proof);
 signed_message* VIEW_Construct_Replay_Prepare(void);
 signed_message* VIEW_Construct_Replay_Commit(void);
 
-
 signed_message *RECON_Construct_Recon_Erasure_Message(dll_struct *list,
 							int32u *more_to_encode);
+
+/* Functions and data structures used for recovery */
+typedef struct dummy_ord_cert_message {
+  int32u seq_num;
+  int32u view;
+} ord_cert_message;
+
+typedef struct dummy_ord_cert_reply_message {
+  int32u seq_num;
+  int32u view;
+  complete_pre_prepare_message pre_prepare;
+} ord_cert_reply_message;
+
+typedef struct dummy_po_cert_message {
+  int32u server_id;
+  int32u seq_num;
+} po_cert_message;
+
+typedef struct dummy_po_cert_reply_message {
+  int32u server_id;
+  int32u seq_num;
+  int32u ack_count;
+} po_cert_reply_message;
+
+typedef struct dummy_db_state_digest_request_message {
+  int32u checkpoint_id;
+} db_state_digest_request_message;
+
+typedef struct dummy_db_state_digest_reply_message {
+  int32u checkpoint_id;
+  off_t  state_size;
+  byte digest[DIGEST_SIZE];
+} db_state_digest_reply_message;
+
+typedef struct dummy_db_state_validation_request_message {
+  int32u checkpoint_id;
+  int32u data_block;
+} db_state_validation_request_message;
+
+typedef struct dummy_db_state_validation_reply_message {
+  int32u checkpoint_id;
+  int32u data_block;
+  byte digest[DIGEST_SIZE];
+} db_state_validation_reply_message;
+
+typedef struct dummy_db_state_transfer_request_message {
+  int32u checkpoint_id;
+  int32u data_block;
+} db_state_transfer_request_message;
+
+typedef struct dummy_db_state_transfer_reply_message {
+  int32u checkpoint_id;
+  int32u data_block;
+  int32u part;
+  int32u bytes;
+} db_state_transfer_reply_message;
+
+typedef struct dummy_catch_up_message{
+} catch_up_message;
+
+typedef struct dummy_catch_up_reply_message{
+  int32u view;
+  int32u seq_num;
+  int32u aru[NUM_SERVER_SLOTS];
+} catch_up_reply_message;
+
+signed_message *RECOVERY_Construct_Ord_Cert_Message(int32u, int32u);
+signed_message *RECOVERY_Construct_Ord_Cert_Reply_Message(int32u, int32u, char*, int, complete_pre_prepare_message);
+signed_message *RECOVERY_Construct_PO_Cert_Message(int32u, int32u);
+signed_message *RECOVERY_Construct_PO_Cert_Reply_Message(int32u, int32u, char*, int32u, int);
+signed_message *RECOVERY_Construct_DB_State_Digest_Request_Message(int32u);
+signed_message *RECOVERY_Construct_DB_State_Digest_Reply_Message(int32u, byte[], off_t);
+signed_message *RECOVERY_Construct_DB_State_Validation_Request_Message(int32u, int32u);
+signed_message *RECOVERY_Construct_DB_State_Validation_Reply_Message(int32u, int32u, byte[]);
+signed_message *RECOVERY_Construct_DB_State_Transfer_Request_Message(int32u, int32u);
+signed_message *RECOVERY_Construct_DB_State_Transfer_Reply_Message(int32u, int32u, int32u, char*, int32u);
+signed_message *RECOVERY_Construct_Catch_Up_Message();
+signed_message *RECOVERY_Construct_Catch_Up_Reply_Message(int32u, int32u, int32u[]);
 #endif

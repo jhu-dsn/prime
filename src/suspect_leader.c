@@ -1,6 +1,6 @@
 /*
  * Prime.
- *     
+ *
  * The contents of this file are subject to the Prime Open-Source
  * License, Version 1.0 (the ``License''); you may not use
  * this file except in compliance with the License.  You may obtain a
@@ -10,24 +10,28 @@
  *
  * or in the file ``LICENSE.txt'' found in this distribution.
  *
- * Software distributed under the License is distributed on an AS IS basis, 
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License 
- * for the specific language governing rights and limitations under the 
+ * Software distributed under the License is distributed on an AS IS basis,
+ * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
+ * for the specific language governing rights and limitations under the
  * License.
  *
- * The Creators of Prime are:
- *  Yair Amir, Jonathan Kirsch, and John Lane.
+ * Creators:
+ *   Yair Amir            yairamir@cs.jhu.edu
+ *   Jonathan Kirsch      jak@cs.jhu.edu
+ *   John Lane            johnlane@cs.jhu.edu
+ *   Marco Platania       platania@cs.jhu.edu
  *
- * Special thanks to Brian Coan for major contributions to the design of
- * the Prime algorithm. 
- *  	
- * Copyright (c) 2008 - 2013 
+ * Major Contributors:
+ *   Brian Coan           Design of the Prime algorithm
+ *   Jeff Seibert         View Change protocol
+ *
+ * Copyright (c) 2008 - 2014
  * The Johns Hopkins University.
  * All rights reserved.
- * 
- * Major Contributor(s):
- * --------------------
- *     Jeff Seibert
+ *
+ * Partial funding for Prime research was provided by the Defense Advanced
+ * Research Projects Agency (DARPA) and The National Security Agency (NSA).
+ * Prime is not necessarily endorsed by DARPA or the NSA.
  *
  */
 
@@ -35,8 +39,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include "util/alarm.h"
-#include "util/memory.h"
+#include "spu_alarm.h"
+#include "spu_memory.h"
 #include "order.h"
 #include "data_structs.h"
 #include "utility.h"
@@ -82,7 +86,7 @@ void SUSPECT_Dispatcher(signed_message *mess)
    * THE MESSAGE HAS BEEN APPLIED TO THE DATA STRUCTURE
    *
    * THE MESSAGE HAS PASSED VALIDATION
-     */
+   */
   switch (mess->type) {
     
   case RTT_PING:
@@ -130,8 +134,6 @@ void SUSPECT_Initialize_Data_Structure()
     SUSPECT_TAT_Measure_Periodically(0, NULL);
     SUSPECT_TAT_UB_Periodically(0, NULL);
     SUSPECT_Suspect_Leader_Periodically(0, NULL);
-
-
 }
 
 void SUSPECT_Initialize_Upon_View_Change(void) {
@@ -192,7 +194,6 @@ void SUSPECT_TAT_UB_Periodically(int dummy, void *dummyp) {
     E_queue(SUSPECT_TAT_UB_Periodically, 0, NULL, t); 
 }
 
-
 void SUSPECT_Ping_Periodically (int dummy, void *dummyp) 
 {
     sp_time t;
@@ -202,9 +203,7 @@ void SUSPECT_Ping_Periodically (int dummy, void *dummyp)
     t.sec = SUSPECT_PING_SEC;
     t.usec = SUSPECT_PING_USEC;
     E_queue(SUSPECT_Ping_Periodically, 0, NULL, t);
-
 }
-
 
 void SUSPECT_New_Leader_Proof_Periodically (int dummy, void *dummyp) 
 {
@@ -219,7 +218,6 @@ void SUSPECT_New_Leader_Proof_Periodically (int dummy, void *dummyp)
     t.sec = SUSPECT_LEADER_SEC;
     t.usec = SUSPECT_LEADER_USEC;
     E_queue(SUSPECT_New_Leader_Proof_Periodically, 0, NULL, t);
-
 }
 
 
@@ -263,7 +261,6 @@ void SUSPECT_Send_RTT_Ping ()
 
     SIG_Add_To_Pending_Messages(ping, BROADCAST, UTIL_Get_Timeliness(RTT_PING));
     dec_ref_cnt(ping);
-
 }
 
 void SUSPECT_Upon_Receiving_RTT_Ping  (signed_message *mess) 
@@ -285,7 +282,6 @@ void SUSPECT_Send_RTT_Pong (int32u server_id, int32u seq_num)
     SIG_Add_To_Pending_Messages(pong, dest_bits, UTIL_Get_Timeliness(RTT_PONG));
     dec_ref_cnt(pong);
 }
-
 
 void SUSPECT_Upon_Receiving_RTT_Pong  (signed_message *mess) 
 {
@@ -336,7 +332,6 @@ void SUSPECT_Send_TAT_Measure()
 void SUSPECT_Upon_Receiving_TAT_UB  (signed_message *mess) 
 {
 
-
 }
 
 
@@ -359,8 +354,6 @@ void   SUSPECT_Upon_Receiving_New_Leader (signed_message *mess) {
 	SUSPECT_New_Leader_Proof_Periodically(0, NULL);
 	VIEW_Start_View_Change();
     }
-    
-
 }
 
 void SUSPECT_Send_New_Leader_Proof() {
@@ -380,7 +373,6 @@ void   SUSPECT_Upon_Receiving_New_Leader_Proof (signed_message *mess) {
 	VIEW_Start_View_Change();
     }
 }
-
 
 /* These two functions are exposed to other protocols so they can simply call the function at the proper times */
 
@@ -412,5 +404,3 @@ void SUSPECT_Cleanup()
 {
 
 }
-
-

@@ -1,12 +1,12 @@
 /*
- * Prime.
+ * Steward.
  *     
- * The contents of this file are subject to the Prime Open-Source
+ * The contents of this file are subject to the Steward Open-Source
  * License, Version 1.0 (the ``License''); you may not use
  * this file except in compliance with the License.  You may obtain a
  * copy of the License at:
  *
- * http://www.dsn.jhu.edu/byzrep/prime/LICENSE.txt
+ * http://www.dsn.jhu.edu/byzrep/steward/LICENSE.txt
  *
  * or in the file ``LICENSE.txt'' found in this distribution.
  *
@@ -15,31 +15,24 @@
  * for the specific language governing rights and limitations under the 
  * License.
  *
- * The Creators of Prime are:
- *  Yair Amir, Jonathan Kirsch, and John Lane.
+ * The Creators of Steward are:
+ *  Yair Amir, Claudiu Danilov, Danny Dolev, Jonathan Kirsch, John Lane,
+ *  Cristina Nita-Rotaru, Josh Olsen, and David Zage.
  *
- * Special thanks to Brian Coan for major contributions to the design of
- * the Prime algorithm. 
- *  	
- * Copyright (c) 2008 - 2013 
- * The Johns Hopkins University.
+ * Copyright (c) 2005 - 2010 
+ * The Johns Hopkins University, Purdue University, The Hebrew University.
  * All rights reserved.
- * 
- * Major Contributor(s):
- * --------------------
- *     Jeff Seibert
  *
  */
 
 #include "../OpenTC-1.1/TC-lib-1.0/TC.h" 
-#include "util/arch.h"
 #include "openssl_rsa.h"
 #include "data_structs.h"
-#include "util/arch.h"
-#include "util/alarm.h"
-#include "util/sp_events.h"
-#include "util/data_link.h"
-#include "util/memory.h"
+#include "arch.h"
+#include "spu_alarm.h"
+#include "spu_events.h"
+#include "spu_data_link.h"
+#include "spu_memory.h"
 
 extern server_variables VAR;
 

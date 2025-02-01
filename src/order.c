@@ -1,6 +1,6 @@
 /*
  * Prime.
- *     
+ *
  * The contents of this file are subject to the Prime Open-Source
  * License, Version 1.0 (the ``License''); you may not use
  * this file except in compliance with the License.  You may obtain a
@@ -10,24 +10,28 @@
  *
  * or in the file ``LICENSE.txt'' found in this distribution.
  *
- * Software distributed under the License is distributed on an AS IS basis, 
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License 
- * for the specific language governing rights and limitations under the 
+ * Software distributed under the License is distributed on an AS IS basis,
+ * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
+ * for the specific language governing rights and limitations under the
  * License.
  *
- * The Creators of Prime are:
- *  Yair Amir, Jonathan Kirsch, and John Lane.
+ * Creators:
+ *   Yair Amir            yairamir@cs.jhu.edu
+ *   Jonathan Kirsch      jak@cs.jhu.edu
+ *   John Lane            johnlane@cs.jhu.edu
+ *   Marco Platania       platania@cs.jhu.edu
  *
- * Special thanks to Brian Coan for major contributions to the design of
- * the Prime algorithm. 
- *  	
- * Copyright (c) 2008 - 2013 
+ * Major Contributors:
+ *   Brian Coan           Design of the Prime algorithm
+ *   Jeff Seibert         View Change protocol
+ *
+ * Copyright (c) 2008 - 2014
  * The Johns Hopkins University.
  * All rights reserved.
  *
- * Major Contributor(s):
- * --------------------
- *     Jeff Seibert
+ * Partial funding for Prime research was provided by the Defense Advanced
+ * Research Projects Agency (DARPA) and The National Security Agency (NSA).
+ * Prime is not necessarily endorsed by DARPA or the NSA.
  *
  */
 
@@ -35,8 +39,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include "util/alarm.h"
-#include "util/memory.h"
+#include "spu_alarm.h"
+#include "spu_memory.h"
 #include "order.h"
 #include "data_structs.h"
 #include "utility.h"
@@ -51,6 +55,7 @@
 #include "recon.h"
 #include "suspect_leader.h"
 #include "view_change.h"
+#include "proactive_recovery.h"
 
 /* Global variables */
 extern server_variables   VAR;
@@ -91,7 +96,7 @@ void ORDER_Dispatcher(signed_message *mess)
   case COMMIT:
     ORDER_Upon_Receiving_Commit(mess);
     break;
-    
+ 
   default:
     INVALID_MESSAGE("ORDER Dispatcher");
   }
@@ -116,17 +121,20 @@ void ORDER_Initialize_Data_Structure()
 
   UTIL_Stopwatch_Start(&DATA.ORD.pre_prepare_sw);
 
-  Alarm(PRINT_LOCAL, "Initialized Ordering data structure.\n");
+  Alarm(DEBUG, "Initialized Ordering data structure.\n");
 
   /* If I'm the leader, try to start sending Pre-Prepares */
   if (UTIL_I_Am_Leader())
     ORDER_Periodically(0, NULL);
 }
 
-
 void ORDER_Periodically(int dummy, void *dummyp)
 {
   sp_time t;
+
+  if(DATA.buffering_during_recovery == 1)
+    return;
+
   if (UTIL_I_Am_Leader()) {
       ORDER_Send_One_Pre_Prepare(TIMEOUT_CALLER);
       t.sec  = PRE_PREPARE_SEC; 
@@ -207,8 +215,10 @@ void ORDER_Upon_Receiving_Pre_Prepare(signed_message *mess)
      * again. Otherwise, flood it if I'm not the leader. */
     if (slot->forwarded_pre_prepare_parts[part_num])
 	Alarm(DEBUG, "Not re-forwarding PP part %d\n", part_num);
-    else if(!UTIL_I_Am_Leader())
-	ORDER_Flood_Pre_Prepare(mess);
+    else if(!UTIL_I_Am_Leader()) {
+        if(DATA.buffering_during_recovery == 0)
+	  ORDER_Flood_Pre_Prepare(mess);
+    }
 
     /* If we now have the complete Pre-Prepare for the first time, do the 
      * following:
@@ -225,6 +235,9 @@ void ORDER_Upon_Receiving_Pre_Prepare(signed_message *mess)
 	inc_ref_cnt(mess);
 
 	slot->should_handle_complete_pre_prepare = 0;
+
+        if(DATA.buffering_during_recovery == 1)
+          return;
 
 	/* Non-leaders should send a Prepare */
 	if(!UTIL_I_Am_Leader()) {
@@ -277,6 +290,7 @@ void ORDER_Upon_Receiving_Pre_Prepare(signed_message *mess)
 
 	}
 
+	//Alarm(PRINT, "covers %d pp->seq_num %d ARU %d\n", covers, pp_specific->seq_num, DATA.ORD.ARU);
 	if (covers && pp_specific->seq_num == DATA.ORD.ARU + 1) {
 	    SUSPECT_Stop_Measure_TAT();
 	} 
@@ -295,6 +309,9 @@ void ORDER_Upon_Receiving_Prepare(signed_message *mess)
 {
   ord_slot *slot;
   prepare_message *prepare_specific;
+
+  if(DATA.buffering_during_recovery == 1)
+    return;
 
   prepare_specific = (prepare_message*)(mess+1);
 
@@ -346,10 +363,11 @@ void ORDER_Upon_Receiving_Commit(signed_message *mess)
 
   if(slot == NULL)
     return;
-  
+
   /* Execute the commit certificate  only the first time that we get it */
   if(slot->execute_commit) {
-    Alarm(PRINT, "receiving commit execute commit seq %d\n", slot->seq_num);
+    if(DATA.buffering_during_recovery == 0)
+      Alarm(PRINT, "receiving commit execute commit seq %d\n", slot->seq_num);
     ORDER_Execute_Commit(slot);
   }
 }
@@ -360,7 +378,7 @@ int32u ORDER_Ready_To_Execute(ord_slot *o_slot)
   complete_pre_prepare_message *prev_pp;
   ord_slot *prev_ord_slot;
   po_slot *p_slot;
-  int32u gseq, i, j;
+  int32u gseq, i, j; //, check = 1;
   //int32u prev_pop[NUM_SERVER_SLOTS];
   int32u cur_pop[NUM_SERVER_SLOTS];
   stdit it;
@@ -373,8 +391,8 @@ int32u ORDER_Ready_To_Execute(ord_slot *o_slot)
   gseq = pp->seq_num;
 
   if (DATA.preinstall && DATA.VIEW.executeTo < gseq) {
-      Alarm(PRINT, "Can't yet execute because preinstalled view, but slot beyond the execTo\n");
-      return 0;
+    Alarm(PRINT, "Can't yet execute because preinstalled view, but slot beyond the execTo\n");
+    return 0;
   }
 
   /* First check to see if we've globally executed the previous
@@ -389,7 +407,7 @@ int32u ORDER_Ready_To_Execute(ord_slot *o_slot)
      * executed the previous global slot.  Put it on hold. */
     Alarm(PRINT, "Ordered slot %d but my aru is %d!\n", gseq, DATA.ORD.ARU);
     UTIL_Mark_ORD_Slot_As_Pending(gseq, o_slot);
-    return 0;
+    goto recover;
   }
 
   /* If we already know there are po-requests missing, we can't execute */
@@ -397,7 +415,7 @@ int32u ORDER_Ready_To_Execute(ord_slot *o_slot)
     Alarm(PRINT, "%d requests missing for gseq %d\n", 
 	  o_slot->num_remaining_for_execution, gseq);
     UTIL_Mark_ORD_Slot_As_Pending(gseq, o_slot);
-    return 0;
+    goto recover;
   }
 
   /* See which PO-Requests are now eligible for execution. */
@@ -423,14 +441,12 @@ int32u ORDER_Ready_To_Execute(ord_slot *o_slot)
       prev_pop[i] = PRE_ORDER_Proof_ARU(i, prev_pp->cum_acks);
       */
   }
-
-  for(i = 1; i <= NUM_SERVERS; i++)
+  for(i = 1; i <= NUM_SERVERS; i++) {
     cur_pop[i] = PRE_ORDER_Proof_ARU(i, pp->cum_acks);
+  }
 
   for(i = 1; i <= NUM_SERVERS; i++) {
-    //Alarm(DEBUG, "check server_aru[%d] %d cur %d\n", i, DATA.ORD.server_aru[i], cur_pop[i]);
     for(j = DATA.ORD.server_aru[i] + 1; j <= cur_pop[i]; j++) {
-
       p_slot = UTIL_Get_PO_Slot_If_Exists(i, j);
 
       if(p_slot == NULL || p_slot->po_request == NULL) {
@@ -446,16 +462,26 @@ int32u ORDER_Ready_To_Execute(ord_slot *o_slot)
       }
     }
   }
-
+  
   /* If any PO-Request was missing, the slot is not ready to be executed. */
   if(o_slot->num_remaining_for_execution > 0) {
     Alarm(PRINT, "Not executing global seq %d, waiting for %d requests\n",
           gseq, o_slot->num_remaining_for_execution);
-    UTIL_Mark_ORD_Slot_As_Pending(gseq, o_slot);
-    return 0;
+    goto recover;
   }
   
   return 1;
+
+  // If we didn't pass the check, retrieve missing Prime certificates
+  recover:
+  #if RECOVERY
+  if(DATA.buffering_during_recovery == 0 && DATA.recovery_in_progress == 0) {
+    RECOVERY_Initialize_Catch_Up_Struct();
+    DATA.buffering_during_recovery = 1;
+    RECOVERY_Catch_Up_Periodically(0, NULL);
+  }
+  #endif
+  return 0;
 }
 
 void ORDER_Execute_Commit(ord_slot *o_slot)
@@ -472,7 +498,6 @@ void ORDER_Execute_Commit(ord_slot *o_slot)
   char *p;
   int32u wa_bytes;
   complete_pre_prepare_message *pp;
-  //sp_time t;
 
   assert(o_slot);
 
@@ -483,8 +508,24 @@ void ORDER_Execute_Commit(ord_slot *o_slot)
 
   gseq = pp->seq_num;
 
+  // Put the slot in the pending list if the server is executing recovery operation
+  if(DATA.buffering_during_recovery == 1) {
+    if(gseq > DATA.CAT.rec_point) {
+      ord_slot *temp_slot = UTIL_Get_Pending_ORD_Slot_If_Exists(gseq);
+      if(temp_slot == NULL) {
+        UTIL_Mark_ORD_Slot_As_Pending(gseq, o_slot);
+        if(gseq > DATA.CAT.last_buffered_mess)
+          DATA.CAT.last_buffered_mess = gseq;
+        Alarm(PRINT, "Buffering message with sequence number %d\n", gseq);
+      }
+    }
+    if(DATA.execute_batch == 0)
+      return;
+  }
+
   if(!ORDER_Ready_To_Execute(o_slot)) {
     Alarm(PRINT, "Not yet ready to execute seq %d\n", gseq);
+    UTIL_Mark_ORD_Slot_As_Pending(gseq, o_slot);
     return;
   }
   o_slot->execute_commit = 0;
@@ -520,8 +561,10 @@ void ORDER_Execute_Commit(ord_slot *o_slot)
       */
   }
   
-  for(i = 1; i <= NUM_SERVERS; i++)
+  for(i = 1; i <= NUM_SERVERS; i++) {
     cur_pop[i] = PRE_ORDER_Proof_ARU(i, pp->cum_acks);
+    o_slot->aru_at_this_point[i] = cur_pop[i];
+  }
 
 #if 0
 #if 0
@@ -545,13 +588,13 @@ void ORDER_Execute_Commit(ord_slot *o_slot)
   o_slot->executed = 1;
   assert(gseq == (DATA.ORD.ARU + 1));
   DATA.ORD.ARU++;
-  //Alarm(PRINT, "Executed %d\n", DATA.ORD.ARU);
 
   for(i = 1; i <= NUM_SERVERS; i++) {
-      Alarm(DEBUG, "executing server %d %d to %d\n", i, DATA.ORD.server_aru[i], cur_pop[i]); 
+    Alarm(DEBUG, "executing server %d %d to %d\n", i, DATA.ORD.server_aru[i], cur_pop[i]); 
     for(j = DATA.ORD.server_aru[i] + 1; j <= cur_pop[i]; j++) {
       p_slot = UTIL_Get_PO_Slot_If_Exists(i, j);
       assert(p_slot);
+      if(p_slot->executed == 1) continue;
 
       po_request_specific = NULL;
       po_request          = p_slot->po_request;
@@ -559,18 +602,18 @@ void ORDER_Execute_Commit(ord_slot *o_slot)
 
       po_request_specific = (po_request_message *)(po_request + 1);
       num_events          = po_request_specific->num_events;
-      
+
       DATA.ORD.events_ordered += num_events;
-      Alarm(PRINT_LOCAL, "Set events_ordered to %d\n", 
+      Alarm(DEBUG, "Set events_ordered to %d\n", 
 	    DATA.ORD.events_ordered);
 
       /* We now need to execute these events we just ordered. Go through
        * all of the events in the PO-Request and execute each one. */
-      
       p = (char *)(po_request_specific + 1);
       for(k = 0; k < num_events; k++) {
 	event = (signed_message *)p;
 	ORDER_Execute_Event(event);
+        p_slot->executed = 1;
 
 	/* If this is a wide-area message, then some digest bytes may 
 	 * have been appended.  Take these into consideration. */
@@ -578,21 +621,26 @@ void ORDER_Execute_Commit(ord_slot *o_slot)
 	p += event->len + sizeof(signed_message) + wa_bytes;
       }
       
-
       /* We've executed all of the events in pre-order slot, so clean
        * it up. */
+      #if !RECOVERY
       PRE_ORDER_Garbage_Collect_PO_Slot(i, j);
+      #endif
     }
     DATA.ORD.server_aru[i] = cur_pop[i];
   }
 
-  /* Garbage collect seq-1 when I commit seq */
+  /* Garbage collect seq-1 when I commit seq */  
+  #if !RECOVERY
   ORDER_Attempt_To_Garbage_Collect_ORD_Slot(gseq-1);
-  
-  //t.sec = 0;
-  //t.usec = 1000;
-  //E_queue(ORDER_Attempt_To_Execute_Pending_Local_Commits, 0, 0, t);
-  ORDER_Attempt_To_Execute_Pending_Commits(0, 0);
+  sp_time t;
+  t.sec = 0;
+  t.usec = 1000;
+  E_queue(ORDER_Attempt_To_Execute_Pending_Commits, 0, 0, t);
+  #else
+  if(DATA.buffering_during_recovery == 0)
+    ORDER_Attempt_To_Execute_Pending_Commits(0, 0); 
+  #endif
 
   //callback to view change
   if (DATA.preinstall == 1) {
@@ -637,20 +685,21 @@ void ORDER_Execute_Update(signed_message *mess)
 
   assert(mess->type == UPDATE);
 
+  u = (signed_update_message *)mess;
+  DATA.PO.client_ts[mess->machine_id] = u->update.time_stamp;
+
   BENCH.updates_executed++;
   if(BENCH.updates_executed == 1)
     UTIL_Stopwatch_Start(&BENCH.test_stopwatch);
-
+  
   if(BENCH.updates_executed % 50 == 0)
     Alarm(PRINT, "Executed %d updates\n", BENCH.updates_executed);
 
-  u = (signed_update_message *)mess;
   Alarm(DEBUG, "Ordered update with timestamp %d\n", u->update.time_stamp);
+  UTIL_State_Machine_Output(u);
 
   if(u->update.server_id == VAR.My_Server_ID)
     UTIL_Respond_To_Client(mess->machine_id, u->update.time_stamp);
-
-  UTIL_State_Machine_Output(u);
 
   if(BENCH.updates_executed == BENCHMARK_END_RUN) {
     ORDER_Cleanup();
@@ -710,8 +759,10 @@ void ORDER_Update_Forwarding_White_Line()
     if(slot != NULL && 
        slot->collected_all_parts && 
        slot->num_forwarded_parts == slot->total_parts) {
-      
+
+      #if !RECOVERY
       ORDER_Attempt_To_Garbage_Collect_ORD_Slot(seq);
+      #endif
       DATA.ORD.forwarding_white_line++;
     }
     else
@@ -741,7 +792,6 @@ void ORDER_Attempt_To_Garbage_Collect_ORD_Slot(int32u seq)
     return;
 
   ORDER_Garbage_Collect_ORD_Slot(slot);
-
 }
 
 void ORDER_Garbage_Collect_ORD_Slot(ord_slot *slot)
@@ -821,11 +871,13 @@ void ORDER_Cleanup()
       close(NET.client_sd[i]);
   }
   Alarm(PRINT, "------------------------------------------------\n");
+  #if !RECOVERY
   Alarm(PRINT, "Throughput = %f updates/sec\n",
 	(double) DATA.ORD.events_ordered / 
 	UTIL_Stopwatch_Elapsed(&BENCH.test_stopwatch));
-  
+  #else
+  fclose(DATA.STATE.fp);
+  #endif
   fclose(BENCH.state_machine_fp);
-
   sleep(2);
 }

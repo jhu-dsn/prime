@@ -1,6 +1,6 @@
 /*
  * Prime.
- *     
+ *
  * The contents of this file are subject to the Prime Open-Source
  * License, Version 1.0 (the ``License''); you may not use
  * this file except in compliance with the License.  You may obtain a
@@ -10,24 +10,28 @@
  *
  * or in the file ``LICENSE.txt'' found in this distribution.
  *
- * Software distributed under the License is distributed on an AS IS basis, 
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License 
- * for the specific language governing rights and limitations under the 
+ * Software distributed under the License is distributed on an AS IS basis,
+ * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
+ * for the specific language governing rights and limitations under the
  * License.
  *
- * The Creators of Prime are:
- *  Yair Amir, Jonathan Kirsch, and John Lane.
+ * Creators:
+ *   Yair Amir            yairamir@cs.jhu.edu
+ *   Jonathan Kirsch      jak@cs.jhu.edu
+ *   John Lane            johnlane@cs.jhu.edu
+ *   Marco Platania       platania@cs.jhu.edu
  *
- * Special thanks to Brian Coan for major contributions to the design of
- * the Prime algorithm. 
- *  	
- * Copyright (c) 2008 - 2013 
+ * Major Contributors:
+ *   Brian Coan           Design of the Prime algorithm
+ *   Jeff Seibert         View Change protocol
+ *
+ * Copyright (c) 2008 - 2014
  * The Johns Hopkins University.
  * All rights reserved.
  *
- * Major Contributor(s):
- * --------------------
- *     Jeff Seibert
+ * Partial funding for Prime research was provided by the Defense Advanced
+ * Research Projects Agency (DARPA) and The National Security Agency (NSA).
+ * Prime is not necessarily endorsed by DARPA or the NSA.
  *
  */
 
@@ -35,7 +39,7 @@
  * came from the server or site that should have sent them and check to make
  * sure that the lengths are correct. */
 
-#include "util/alarm.h"
+#include "spu_alarm.h"
 #include "validate.h"
 #include "data_structs.h"
 #include "error_wrapper.h"
@@ -84,17 +88,31 @@ int32u VAL_Validate_Replay	(replay_message *replay,   int32u num_bytes);
 int32u VAL_Validate_Replay_Prepare	(replay_prepare_message *replay,   int32u num_bytes);
 int32u VAL_Validate_Replay_Commit	(replay_commit_message *replay,   int32u num_bytes);
 
+int32u VAL_Validate_ORD_Cert (ord_cert_message *mess, int32u num_bytes);
+int32u VAL_Validate_Retrieved_ORD_Cert (ord_cert_reply_message *mess, int32u num_bytes);
+int32u VAL_Validate_PO_Cert (po_cert_message *mess, int32u num_bytes);
+int32u VAL_Validate_Retrieved_PO_Cert (po_cert_reply_message *mess, int32u num_bytes);
+int32u VAL_Validate_DB_Digest_Request (db_state_digest_request_message *mess, int32u num_bytes);
+int32u VAL_Validate_DB_Digest_Reply (db_state_digest_reply_message *mess, int32u num_bytes);
+int32u VAL_Validate_DB_Val_Request (db_state_validation_request_message *mess, int32u num_bytes);
+int32u VAL_Validate_DB_Val_Reply (db_state_validation_reply_message *mess, int32u num_bytes);
+int32u VAL_Validate_DB_State_Tran_Request (db_state_transfer_request_message *mess, int32u num_bytes);
+int32u VAL_Validate_Catch_Up(catch_up_message *mess, int32u num_bytes);
+int32u VAL_Validate_Catch_Up_Reply(catch_up_reply_message *mess, int32u num_bytes);
+
 /* Determine if a message from the network is valid. */
 int32u VAL_Validate_Message(signed_message *message, int32u num_bytes) 
 {
+  if(DATA.recovery_in_progress == 1)
+    return 1;
+
   byte *content;
   int32u num_content_bytes;
   int32u ret;
-
+ 
   /* Since we use Merkle trees, all messages except client updates
    * need to be Merkle-tree verified. */
-
-  
+ 
   if (message->type == DUMMY || message->type >= LAST_MESSAGE_TYPE) {
     VALIDATE_FAILURE("Undefined message type");
     return 0;
@@ -122,11 +140,10 @@ int32u VAL_Validate_Message(signed_message *message, int32u num_bytes)
   num_content_bytes = num_bytes - sizeof(signed_message) - (MT_Digests_(message->mt_num) * DIGEST_SIZE); /* always >= 0 */
 
   if (message->len != num_content_bytes) {
-    Alarm(DEBUG, "message type %d len %d actual %d\n", message->type, message->len, num_bytes);
+    Alarm(DEBUG, "message type %s len %d actual %d\n", UTIL_Type_To_String(message->type), message->len, num_content_bytes);
     VALIDATE_FAILURE("Message length incorrect");
     return 0;
   }
-
 
   if(message->type == UPDATE && (CLIENTS_SIGN_UPDATES == 0))
     return 1;
@@ -137,22 +154,11 @@ int32u VAL_Validate_Message(signed_message *message, int32u num_bytes)
 	  return 0;
       }
       if (!VAL_Validate_Signed_Message(message, num_bytes, 1)) {
-	  Alarm(VALID_PRINT, "Validate signed message failed.\n");
+	  //Alarm(PRINT, "Validate signed message failed.\n");
 	  VALIDATE_FAILURE_LOG(message,num_bytes);
 	  return 0;
       }
   } else {
-
-      /* Emulates checking signature of each event contained in the PO Request */
-      /*
-      if(message->type == PO_REQUEST && CLIENTS_SIGN_UPDATES) {
-	  po_request_message *r = (po_request_message *)(message+1);
-	  ret = 1;
-	  for(i = 0; i < r->num_events; i++)
-	      ret = MT_Verify(message);
-	  return ret;
-      }
-      */
       ret = MT_Verify(message);
       if(ret == 0) {
 	  Alarm(PRINT, "MT_Verify returned 0 on message from machine %d type %d "
@@ -162,7 +168,6 @@ int32u VAL_Validate_Message(signed_message *message, int32u num_bytes)
       }
   }
 
-
   /* This is a signed message */
   /*
   if (!VAL_Validate_Signed_Message(message, num_bytes, 1)) {
@@ -171,8 +176,6 @@ int32u VAL_Validate_Message(signed_message *message, int32u num_bytes)
     return 0;
   }
   */
-
-
 
   switch (message->type) {
 
@@ -298,7 +301,7 @@ int32u VAL_Validate_Message(signed_message *message, int32u num_bytes)
   case RB_INIT:
     if((!VAL_Validate_RB_Init((signed_message*)content,num_content_bytes))) {
       VALIDATE_FAILURE_LOG(message, num_bytes);
-      return 0;
+    return 0;
     }
     break;
 
@@ -376,10 +379,91 @@ int32u VAL_Validate_Message(signed_message *message, int32u num_bytes)
     }
     break; 
 
+  case ORD_CERT:
+    if((!VAL_Validate_ORD_Cert((ord_cert_message *)content, num_content_bytes))) {
+        VALIDATE_FAILURE_LOG(message, num_bytes);
+        return 0;
+    }
+    break;
+
+  case ORD_CERT_REPLY:
+    if((!VAL_Validate_Retrieved_ORD_Cert((ord_cert_reply_message *)content, num_content_bytes))) {
+      VALIDATE_FAILURE_LOG(message, num_bytes);
+      return 0;
+    }
+    break;
+
+  case PO_CERT:
+    if((!VAL_Validate_PO_Cert((po_cert_message *)content, num_content_bytes))) {
+        VALIDATE_FAILURE_LOG(message, num_bytes);
+        return 0;
+    }
+    break;
+
+  case PO_CERT_REPLY:
+    if((!VAL_Validate_Retrieved_PO_Cert((po_cert_reply_message *)content, num_content_bytes))) {
+      VALIDATE_FAILURE_LOG(message, num_bytes);
+      return 0;
+    }
+    break;
+
+  case DB_STATE_DIGEST_REQUEST:
+    if((!VAL_Validate_DB_Digest_Request((db_state_digest_request_message *)content, num_content_bytes))) {
+        VALIDATE_FAILURE_LOG(message, num_bytes);
+        return 0;
+    }
+     break;
+          
+  case DB_STATE_DIGEST_REPLY:
+    if((!VAL_Validate_DB_Digest_Reply((db_state_digest_reply_message *)content, num_content_bytes))) {
+        VALIDATE_FAILURE_LOG(message, num_bytes);
+        return 0;
+    }
+     break;
+          
+  case DB_STATE_VALIDATION_REQUEST:
+    if((!VAL_Validate_DB_Val_Request((db_state_validation_request_message *)content, num_content_bytes))) {
+        VALIDATE_FAILURE_LOG(message, num_bytes);
+        return 0;
+    }
+    break;
+
+  case DB_STATE_VALIDATION_REPLY:
+    if((!VAL_Validate_DB_Val_Reply((db_state_validation_reply_message *)content, num_content_bytes))) {
+        VALIDATE_FAILURE_LOG(message, num_bytes);
+        return 0;
+    }
+    break;
+
+  case DB_STATE_TRANSFER_REQUEST:
+    if((!VAL_Validate_DB_State_Tran_Request((db_state_transfer_request_message *)content, num_content_bytes))) {
+        VALIDATE_FAILURE_LOG(message, num_bytes);
+        return 0;
+    }
+    break;
+
+  case DB_STATE_TRANSFER_REPLY:
+    // The validation of DB_STATE_TRANSFER_REPLY messages is done during proactive recovery
+    break;
+
+  case CATCH_UP:
+    if((!VAL_Validate_Catch_Up((catch_up_message *)content, num_content_bytes))) {
+        VALIDATE_FAILURE_LOG(message, num_bytes);
+        return 0;
+    }
+    break;
+
+  case CATCH_UP_REPLY:
+    if((!VAL_Validate_Catch_Up_Reply((catch_up_reply_message *)content, num_content_bytes))) {
+        VALIDATE_FAILURE_LOG(message, num_bytes);
+        return 0;
+    }
+    break;
+
   default:
     Alarm(PRINT, "Not yet checking message type %d!\n", message->type);
   }
-  
+
   return 1;
 }
 
@@ -482,6 +566,18 @@ int32u VAL_Signature_Type(int32u message_type)
   case REPLAY_COMMIT:
   case VC_PROOF:
   case REPLAY:
+  case PO_CERT:
+  case PO_CERT_REPLY:
+  case ORD_CERT:
+  case ORD_CERT_REPLY:
+  case DB_STATE_DIGEST_REQUEST:
+  case DB_STATE_DIGEST_REPLY:
+  case DB_STATE_VALIDATION_REQUEST:
+  case DB_STATE_VALIDATION_REPLY:
+  case DB_STATE_TRANSFER_REQUEST:
+  case DB_STATE_TRANSFER_REPLY:
+  case CATCH_UP:
+  case CATCH_UP_REPLY:
     sig_type = VAL_SIG_TYPE_SERVER;
     break;
   }
@@ -582,11 +678,8 @@ int32u VAL_Validate_PO_Request(po_request_message *po_request, int32u num_bytes)
   /* This is the start of the events contained in the PO-Request */
   p = (char *)(po_request + 1);
 
-
   for(i = 0; i < po_request->num_events; i++) {
-
     mess = (signed_message *)p;
-
     wa_bytes = 0;
 
     if(!VAL_Validate_Message(mess, 
@@ -661,8 +754,7 @@ int32u VAL_Validate_Proof_Matrix(proof_matrix_message *pm, int32u num_bytes)
      if (cur->header.type == PO_ARU && !VAL_Validate_Message((signed_message*)cur, sizeof(po_aru_signed_message))) {
 	//Alarm(PRINT, "sig: %c%c%c%c\n", cur->header.sig[0], cur->header.sig[1], cur->header.sig[2], cur->header.sig[3]);
 	VALIDATE_FAILURE("Proof_Matrix: bad po-aru");
-
-	 return 0;
+	return 0;
      }
      cur++;
   }
@@ -686,6 +778,7 @@ int32u VAL_Validate_Pre_Prepare(pre_prepare_message *pp, int32u num_bytes)
   }
 
   int32u total_parts;
+  /* TODO: MAKE THIS GENERIC FOR ANY f */
   if(NUM_FAULTS == 1)
     total_parts = 1;
   else
@@ -701,7 +794,6 @@ int32u VAL_Validate_Pre_Prepare(pre_prepare_message *pp, int32u num_bytes)
     return 0;
   }
 
-
   int i;
   po_aru_signed_message *cur = (po_aru_signed_message*)(pp + 1);
   for (i = 0; i < pp->num_acks_in_this_message; i++) {
@@ -712,8 +804,6 @@ int32u VAL_Validate_Pre_Prepare(pre_prepare_message *pp, int32u num_bytes)
      }
      cur++;
   }
-
-  
   return 1;
 }
 
@@ -916,7 +1006,6 @@ int32u VAL_Validate_RB_Init(signed_message *payload, int32u num_bytes)
     }
     
     reliable_broadcast_tag *rb_tag = (reliable_broadcast_tag*)(payload+1);
-    //Alarm(PRINT, "RB_Init type %d id %d seq %d view %d\n", payload->type, rb_tag->machine_id, rb_tag->seq_num, rb_tag->view); 
     if (DATA.View != rb_tag->view) {
 	VALIDATE_FAILURE("RB_Init: incorrect view");
 	return 0;
@@ -929,7 +1018,6 @@ int32u VAL_Validate_RB_Init(signed_message *payload, int32u num_bytes)
 
     //this should really be done in validation, otherwise might deliver things ahead of time
     if (DATA.REL.seq_num[payload->machine_id] > rb_tag->seq_num) {
-	//Alarm(PRINT, "RB_Init id %d %d > %d\n", payload->machine_id, DATA.REL.seq_num[payload->machine_id], rb_tag->seq_num); 
 	VALIDATE_FAILURE("RB_Init: incorrect seq_num");
 	return 0;
     }
@@ -956,7 +1044,6 @@ int32u VAL_Validate_RB_Echo(signed_message *payload, int32u num_bytes)
     }
 
     if (DATA.REL.seq_num[payload->machine_id] > rb_tag->seq_num) {
-	//Alarm(PRINT, "RB_Echo type %d id %d %d >= %d\n", payload->type, payload->machine_id, DATA.REL.seq_num[payload->machine_id], rb_tag->seq_num); 
 	VALIDATE_FAILURE("RB_Echo: incorrect seq_num");
 	return 0;
     }
@@ -966,7 +1053,6 @@ int32u VAL_Validate_RB_Echo(signed_message *payload, int32u num_bytes)
 
 int32u VAL_Validate_RB_Ready(signed_message *payload, int32u num_bytes)
 {
-
     if(num_bytes <= sizeof(signed_message) + sizeof(reliable_broadcast_tag)) {
 	VALIDATE_FAILURE("RB_Ready: bad size");
 	return 0;
@@ -984,12 +1070,9 @@ int32u VAL_Validate_RB_Ready(signed_message *payload, int32u num_bytes)
     }
 
     if (DATA.REL.seq_num[payload->machine_id] > rb_tag->seq_num) {
-	Alarm(PRINT, "%s(): known: %d recvd: %d\n", __FUNCTION__, DATA.REL.seq_num[payload->machine_id], rb_tag->seq_num);
 	VALIDATE_FAILURE("RB_Ready: incorrect seq_num");
 	return 0;
     }
-
-
     return 1;
 }
 
@@ -1021,7 +1104,6 @@ int32u VAL_Validate_Report(report_message *report, int32u num_bytes) {
 int32u VAL_Validate_PC_Set(pc_set_message *pc_set,   int32u num_bytes) {
     reliable_broadcast_tag *rb_tag = (reliable_broadcast_tag*)(pc_set);
     if(num_bytes < sizeof(pc_set_message)) {
-	Alarm(PRINT, "pc_set_size %d %d\n", num_bytes, sizeof(pc_set_message));
 	VALIDATE_FAILURE("PC_Set: bad size");
 	return 0;
     }
@@ -1038,7 +1120,7 @@ int32u VAL_Validate_PC_Set(pc_set_message *pc_set,   int32u num_bytes) {
 
     if (rb_tag->seq_num < 1 || rb_tag->seq_num > DATA.VIEW.report[rb_tag->machine_id].pc_set_size) {
 	VALIDATE_FAILURE("PC_Set: seq_num out of bounds");
-	Alarm(PRINT, "id %d seq_num %d pc_set_size %d\n", rb_tag->machine_id, rb_tag->seq_num, DATA.VIEW.report[rb_tag->machine_id].pc_set_size);
+	Alarm(DEBUG, "id %d seq_num %d pc_set_size %d\n", rb_tag->machine_id, rb_tag->seq_num, DATA.VIEW.report[rb_tag->machine_id].pc_set_size);
 	return 0;
     }
 
@@ -1049,7 +1131,6 @@ int32u VAL_Validate_PC_Set(pc_set_message *pc_set,   int32u num_bytes) {
     int count = 0;
     int32u len = sizeof(pc_set_message);
     if (mess->type != PRE_PREPARE) {
-	Alarm(PRINT, "pc_set pre-prepare type %d\n", mess->type);
 	VALIDATE_FAILURE("PC_Set: Message not a Pre-Prepare");
 	return 0;
     }
@@ -1173,4 +1254,198 @@ int32u VAL_Validate_Replay_Commit(replay_commit_message *replay, int32u num_byte
     return 1;
 }
 
+/* Validate messages for proactive recovery */
 
+int32u VAL_Validate_ORD_Cert(ord_cert_message *ord_cert, int32u num_bytes) {
+    if(num_bytes != sizeof(ord_cert_message)) {
+        Alarm(PRINT, "ord_cert_message %d %d\n", num_bytes, sizeof(ord_cert_message));
+        VALIDATE_FAILURE("ORD_CERT: bad size");
+        return 0;
+    }
+    return 1;
+}
+
+int32u VAL_Validate_Retrieved_ORD_Cert(ord_cert_reply_message *cert_reply, int32u num_bytes) {
+  if(num_bytes < sizeof(ord_cert_reply_message)) {
+    Alarm(PRINT, "ord_cert_reply_message_size %d %d\n", num_bytes, sizeof(ord_cert_reply_message));
+    VALIDATE_FAILURE("ORD_CERT_REPLY: bad size");
+    return 0;
+  }
+#if 0
+  /* Message validation occurs during recovery */
+  signed_message *mess;
+  complete_pre_prepare_message pre_prepare;
+  prepare_message *prepare;
+  commit_message *commit;
+  int32u count = 0, len, size = 0;
+  mess = (signed_message *)(cert_reply + 1);
+  len = sizeof(ord_cert_reply_message);
+
+  pre_prepare = cert_reply->pre_prepare;
+  len += size;
+
+  while(count < 2 * VAR.Faults && len < num_bytes) {
+    size = UTIL_Message_Size(mess);
+    if(mess->type != PREPARE) {
+      VALIDATE_FAILURE("ORD_CERT_REPLY: Message not a PREPARE");
+      return 0;
+    }
+    if(size > num_bytes - len) {
+      VALIDATE_FAILURE("ORD_CERT_REPLY: bad PREPARE size");
+      return 0;
+    }
+    if(!VAL_Validate_Message(mess, size)) {
+      VALIDATE_FAILURE("ORD_CERT_REPLY: PREPARE failed");
+      return 0;
+    }
+    prepare = (prepare_message *)(mess + 1);
+    if(prepare->seq_num != pre_prepare.seq_num) {
+      VALIDATE_FAILURE("ORD_CERT_REPLY: PREPARE doesn't match PRE_PREPARE");
+      return 0;
+    }
+    len += size;
+    mess = (signed_message*)((char*)mess + size);
+    count++;
+  } 
+
+  count = 0;
+  while(count < 2 * VAR.Faults + 1 && len < num_bytes) {
+    size = UTIL_Message_Size(mess);
+    if(mess->type != COMMIT) {
+      VALIDATE_FAILURE("ORD_CERT_REPLY: Message not a COMMIT");
+      return 0;
+    }
+    if(size > num_bytes - len) {
+      VALIDATE_FAILURE("ORD_CERT_REPLY: bad COMMIT size");
+      return 0;
+    }
+    if(!VAL_Validate_Message(mess, size)) {
+      VALIDATE_FAILURE("ORD_CERT_REPLY: COMMIT failed");
+      return 0;
+    }
+    commit = (commit_message *)(mess + 1);
+    if(commit->seq_num != pre_prepare.seq_num) {
+      VALIDATE_FAILURE("ORD_CERT_REPLY: COMMIT doesn't match PRE_PREPARE");
+      return 0;
+    }
+    len += size;
+    mess = (signed_message*)((char*)mess + size);
+    count++;
+  }
+
+  if(len != num_bytes) {
+    VALIDATE_FAILURE("ORD_CERT_REPLY: bad total size");
+    return 0;
+  }
+
+  if(count < 2 * VAR.Faults) {
+    VALIDATE_FAILURE("ORD_CERT_REPLY: incorrect number of messages");
+    Alarm(PRINT, "Only %d\n", count);
+    return 0;
+  }
+#endif
+  return 1;
+}
+
+int32u VAL_Validate_PO_Cert(po_cert_message *po_cert, int32u num_bytes) {
+    if(num_bytes != sizeof(po_cert_message)) {
+        Alarm(PRINT, "po_cert_message %d %d\n", num_bytes, sizeof(po_cert_message));
+        VALIDATE_FAILURE("PO_CERT: bad size");
+        return 0;
+    }
+    return 1;
+}
+
+int32u VAL_Validate_Retrieved_PO_Cert(po_cert_reply_message *cert_reply, int32u num_bytes) {
+  if(num_bytes < sizeof(po_cert_reply_message)) {
+    Alarm(PRINT, "po_cert_reply_message_size %d %d\n", num_bytes, sizeof(po_cert_reply_message));
+    VALIDATE_FAILURE("PO_CERT_REPLY: bad size");
+    return 0;
+  }
+#if 0
+  /* Message validation occurs during recovery */
+  signed_message *mess;
+  int32u size, len;
+  mess = (signed_message *)(cert_reply + 1);
+  len = sizeof(po_cert_reply_message);
+  size = UTIL_Message_Size(mess);
+  
+  if(mess->type != PO_REQUEST) {
+    Alarm(PRINT, "po_cert_reply_message po_request type %d\n", mess->type);
+    VALIDATE_FAILURE("PO_CERT_REPLY: Message not a PO_REQUEST");
+    return 0;
+  }
+
+  if(size > num_bytes - len)
+    VALIDATE_FAILURE("PO_CERT_REPLY: bad PO_REQUEST size");
+
+  if(!VAL_Validate_Message(mess, size)) {
+    VALIDATE_FAILURE("PO_CERT_REPLY: PO_REQUEST failed");
+    return 0;
+  }
+#endif
+  return 1;
+}
+
+int32u VAL_Validate_DB_Digest_Request(db_state_digest_request_message *mess, int32u num_bytes) {
+    if(num_bytes != sizeof(db_state_digest_request_message)) {
+        Alarm(PRINT, "db_state_digest_request_message %d %d\n", num_bytes, sizeof(db_state_digest_request_message));
+        VALIDATE_FAILURE("DB_STATE_DIGEST_REQUEST_MESSAGE: bad size");
+        return 0;
+    }
+    return 1;
+}
+
+int32u VAL_Validate_DB_Digest_Reply(db_state_digest_reply_message *mess, int32u num_bytes) {
+    if(num_bytes != sizeof(db_state_digest_reply_message)) {
+        Alarm(PRINT, "db_state_digest_reply_message %d %d\n", num_bytes, sizeof(db_state_digest_reply_message));
+        VALIDATE_FAILURE("DB_STATE_DIGEST_REPLY_MESSAGE: bad size");
+        return 0;
+    }
+    return 1;
+}
+
+int32u VAL_Validate_DB_Val_Request(db_state_validation_request_message *mess, int32u num_bytes) {
+    if(num_bytes != sizeof(db_state_validation_request_message)) {
+        Alarm(PRINT, "db_state_validation_request_message %d %d\n", num_bytes, sizeof(db_state_validation_request_message));
+        VALIDATE_FAILURE("DB_STATE_VALIDATION_REQUEST_MESSAGE: bad size");
+        return 0;
+    }
+    return 1;
+}
+
+int32u VAL_Validate_DB_Val_Reply(db_state_validation_reply_message *mess, int32u num_bytes) {
+    if(num_bytes != sizeof(db_state_validation_reply_message)) {
+        Alarm(PRINT, "db_state_validation_reply_message %d %d\n", num_bytes, sizeof(db_state_validation_reply_message));
+        VALIDATE_FAILURE("DB_STATE_VALIDATION_REPLY_MESSAGE: bad size");
+        return 0;
+    }
+    return 1;
+}
+
+int32u VAL_Validate_DB_State_Tran_Request(db_state_transfer_request_message *mess, int32u num_bytes) {
+    if(num_bytes != sizeof(db_state_transfer_request_message)) {
+        Alarm(PRINT, "db_state_transfer_request_message %d %d\n", num_bytes, sizeof(db_state_transfer_request_message));
+        VALIDATE_FAILURE("DB_STATE_TRANSFER_REQUEST_MESSAGE: bad size");
+        return 0;
+    }
+    return 1;
+}
+
+int32u VAL_Validate_Catch_Up(catch_up_message *mess, int32u num_bytes) {
+    if(num_bytes != sizeof(catch_up_message)) {
+        Alarm(PRINT, "catch_up_message %d %d\n", num_bytes, sizeof(catch_up_message));
+        VALIDATE_FAILURE("CATCH_UP_MESSAGE: bad size");
+        return 0;
+    }
+    return 1;
+}
+
+int32u VAL_Validate_Catch_Up_Reply(catch_up_reply_message *mess, int32u num_bytes) {
+    if(num_bytes != sizeof(catch_up_reply_message)) {
+        Alarm(PRINT, "catch_up_reply_message %d %d\n", num_bytes, sizeof(catch_up_reply_message));
+        VALIDATE_FAILURE("CATCH_UP_REPLY_MESSAGE: bad size");
+        return 0;
+    }
+    return 1;
+}

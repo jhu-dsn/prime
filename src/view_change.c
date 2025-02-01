@@ -1,6 +1,6 @@
 /*
  * Prime.
- *     
+ *
  * The contents of this file are subject to the Prime Open-Source
  * License, Version 1.0 (the ``License''); you may not use
  * this file except in compliance with the License.  You may obtain a
@@ -10,24 +10,28 @@
  *
  * or in the file ``LICENSE.txt'' found in this distribution.
  *
- * Software distributed under the License is distributed on an AS IS basis, 
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License 
- * for the specific language governing rights and limitations under the 
+ * Software distributed under the License is distributed on an AS IS basis,
+ * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
+ * for the specific language governing rights and limitations under the
  * License.
  *
- * The Creators of Prime are:
- *  Yair Amir, Jonathan Kirsch, and John Lane.
+ * Creators:
+ *   Yair Amir            yairamir@cs.jhu.edu
+ *   Jonathan Kirsch      jak@cs.jhu.edu
+ *   John Lane            johnlane@cs.jhu.edu
+ *   Marco Platania       platania@cs.jhu.edu
  *
- * Special thanks to Brian Coan for major contributions to the design of
- * the Prime algorithm. 
- *  	
- * Copyright (c) 2008 - 2013 
+ * Major Contributors:
+ *   Brian Coan           Design of the Prime algorithm
+ *   Jeff Seibert         View Change protocol
+ *
+ * Copyright (c) 2008 - 2014
  * The Johns Hopkins University.
  * All rights reserved.
- * 
- * Major Contributor(s):
- * --------------------
- *     Jeff Seibert
+ *
+ * Partial funding for Prime research was provided by the Defense Advanced
+ * Research Projects Agency (DARPA) and The National Security Agency (NSA).
+ * Prime is not necessarily endorsed by DARPA or the NSA.
  *
  */
 
@@ -35,8 +39,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include "util/alarm.h"
-#include "util/memory.h"
+#include "spu_alarm.h"
+#include "spu_memory.h"
 #include "order.h"
 #include "data_structs.h"
 #include "utility.h"
@@ -52,6 +56,7 @@
 #include "view_change.h"
 #include "reliable_broadcast.h"
 #include "suspect_leader.h"
+#include "proactive_recovery.h"
 
 /* Global variables */
 extern server_variables   VAR;
@@ -60,17 +65,16 @@ extern server_data_struct DATA;
 extern benchmark_struct   BENCH;
 
 /* Local functions */
-void   VIEW_Upon_Receiving_Report  (signed_message *mess);
-void   VIEW_Upon_Receiving_PC_Set  (signed_message *mess);
-void   VIEW_Upon_Receiving_VC_List  (signed_message *mess);
-void   VIEW_Upon_Receiving_VC_Partial_Sig (signed_message *mess);
-void   VIEW_Upon_Receiving_VC_Proof (signed_message *mess);
-void   VIEW_Upon_Receiving_Replay (signed_message *mess);
-void   VIEW_Upon_Receiving_Replay_Prepare  (signed_message *mess);
-void   VIEW_Upon_Receiving_Replay_Commit  (signed_message *mess);
+void VIEW_Upon_Receiving_Report  (signed_message *mess);
+void VIEW_Upon_Receiving_PC_Set  (signed_message *mess);
+void VIEW_Upon_Receiving_VC_List  (signed_message *mess);
+void VIEW_Upon_Receiving_VC_Partial_Sig (signed_message *mess);
+void VIEW_Upon_Receiving_VC_Proof (signed_message *mess);
+void VIEW_Upon_Receiving_Replay (signed_message *mess);
+void VIEW_Upon_Receiving_Replay_Prepare  (signed_message *mess);
+void VIEW_Upon_Receiving_Replay_Commit  (signed_message *mess);
 
-
-void   VIEW_Flood_Replay(signed_message *mess);
+void VIEW_Flood_Replay(signed_message *mess);
 void VIEW_Execute_Replay();
 void VIEW_Clear_Data_Structure();
 
@@ -178,12 +182,14 @@ void VIEW_Clear_Data_Structure() {
     DATA.VIEW.numSeq = 0;
     DATA.VIEW.curSeq = 0;
     DATA.VIEW.executeTo = 0;
-
 }
 
 
 void VIEW_Start_View_Change() {
-
+    if(DATA.recovery_in_progress == 1 || DATA.buffering_during_recovery == 1) {
+      DATA.preinstall = 0;
+      return;
+    }
     //This is where I set any values that need to be changed
     //upon a view change
 
@@ -203,7 +209,7 @@ void VIEW_Start_View_Change() {
     ord_slot *slot;
     h = &DATA.ORD.History;
     int i;
-    
+
     stdhash_begin(h, &it);
     while (!stdhash_is_end(h, &it)) {
 	char cert[PRIME_MAX_PACKET_SIZE];
@@ -215,6 +221,7 @@ void VIEW_Start_View_Change() {
 	    memcpy(cert, slot->pre_prepare, UTIL_Message_Size(slot->pre_prepare));
 	    offset += UTIL_Message_Size(slot->pre_prepare);
 	    //Alarm(DEBUG, "size of pre-prepare %d, type %d\n", UTIL_Message_Size(slot->pre_prepare), slot->pre_prepare->type);
+
 	    int count = 0;
 	    for (i = 1; i <= NUM_SERVERS; ++i) {
 		if (count < 2*VAR.Faults && slot->prepare_certificate.prepare[i]) {
@@ -311,7 +318,6 @@ void VIEW_Send_Replay_Commit() {
     SIG_Add_To_Pending_Messages(replay, BROADCAST, UTIL_Get_Timeliness(REPLAY_COMMIT));
     dec_ref_cnt(replay);
 }
-
 
 void   VIEW_Upon_Receiving_Report  (signed_message *mess) {
     Alarm(DEBUG, "Received Report\n");
@@ -464,8 +470,7 @@ void   VIEW_Upon_Receiving_VC_Partial_Sig  (signed_message *mess) {
 
 }
 
-
-void   VIEW_Upon_Receiving_VC_Proof (signed_message *mess) {
+void VIEW_Upon_Receiving_VC_Proof (signed_message *mess) {
     Alarm(DEBUG, "Received VC Proof\n");
     if (UTIL_I_Am_Leader() && !DATA.VIEW.sent_replay) {
 	DATA.VIEW.sent_replay = 1;
@@ -474,7 +479,7 @@ void   VIEW_Upon_Receiving_VC_Proof (signed_message *mess) {
     }
 }
 
-void   VIEW_Upon_Receiving_Replay (signed_message *mess) {
+void VIEW_Upon_Receiving_Replay (signed_message *mess) {
     Alarm(DEBUG, "Received Replay\n");
     SUSPECT_Stop_Measure_TAT();
 
@@ -483,7 +488,6 @@ void   VIEW_Upon_Receiving_Replay (signed_message *mess) {
 	VIEW_Flood_Replay(mess);
 	VIEW_Check_Complete_State();
     }
-
 }
 
 /* took this and adapted from the flood_preprepare function */
@@ -524,7 +528,9 @@ void   VIEW_Upon_Receiving_Replay_Commit  (signed_message *mess) {
 	//have to execute based on the server that sent the highest sequence number and is in the proof, right?
 	Alarm(DEBUG, "replay commit 1 %d\n", DATA.VIEW.replay);
 	replay_message *replay = (replay_message*)(DATA.VIEW.replay+1);
-   
+        if(DATA.VIEW.replay == NULL)
+          return;
+ 
 	DATA.VIEW.highest_server_id = VAR.My_Server_ID;
 	int i;
 	for (i = 1; i <= NUM_SERVERS; ++i) {
@@ -536,7 +542,6 @@ void   VIEW_Upon_Receiving_Replay_Commit  (signed_message *mess) {
 	    }
 	}
 
-
 	//and I have this state...
 	if (DATA.preinstall && UTIL_Bitmap_Is_Set(&DATA.VIEW.complete_state, DATA.VIEW.highest_server_id)) {
 	    VIEW_Execute_Replay();
@@ -546,31 +551,55 @@ void   VIEW_Upon_Receiving_Replay_Commit  (signed_message *mess) {
     Alarm(DEBUG, "done with receiving replay commit\n");
 }
 
-
 void VIEW_Execute_Replay() {
     assert(DATA.preinstall == 1);
     DATA.preinstall = 0;
     Alarm(DEBUG, "Executing server %d's pc_set\n", DATA.VIEW.highest_server_id); 
     replay_message *replay = (replay_message*)(DATA.VIEW.replay+1);
-    int aru;
+    signed_message *pc_set;
+    pc_set_message *pc_set_specific;
+    signed_message *pre_prepare;
+    pre_prepare_message *pre_prepare_specific;
+    po_aru_signed_message *po_aru;
+    signed_message *mess;
+    int32u aru, size, count = 0;
     ord_slot *slot;
+
     Alarm(DEBUG, "ARU %d startSeq %d\n", DATA.ORD.ARU, replay->proof.startSeq);
     for (aru = DATA.ORD.ARU+1; aru < replay->proof.startSeq; aru++) {
 	if (!UTIL_DLL_Is_Empty(&DATA.VIEW.pc_set[DATA.VIEW.highest_server_id])) {
-	    signed_message *pc_set = UTIL_DLL_Front_Message(&DATA.VIEW.pc_set[DATA.VIEW.highest_server_id]);
-	    pc_set_message *pc_set_specific = (pc_set_message*)(pc_set+1);
-	    signed_message *pre_prepare = (signed_message*)(pc_set_specific+1);
-	    pre_prepare_message *pre_prepare_specific = (pre_prepare_message*)(pre_prepare+1);
-	    po_aru_signed_message *po_aru = (po_aru_signed_message*)(pre_prepare_specific+1);
-	    //to execute correctly, and to make sure that we can continue to
+	    pc_set = UTIL_DLL_Front_Message(&DATA.VIEW.pc_set[DATA.VIEW.highest_server_id]);
+	    pc_set_specific = (pc_set_message*)(pc_set+1);
+	    pre_prepare = (signed_message*)(pc_set_specific+1);
+	    pre_prepare_specific = (pre_prepare_message*)(pre_prepare+1);
+	    po_aru = (po_aru_signed_message*)(pre_prepare_specific+1);
+            //to execute correctly, and to make sure that we can continue to
 	    // execute after the view change, I have to set up the ord_slots correctly
 	    // and then call ORDER_Execute_Commit(ord_slot *o_slot);
 	    slot = UTIL_Get_ORD_Slot(aru);
 	    slot->prepare_certificate.pre_prepare.seq_num = aru;
 	    slot->prepare_certificate.pre_prepare.view = pre_prepare_specific->view;
-	    // Endadul: assertion fails in normal execution
-            //assert(pre_prepare_specific->num_acks_in_this_message == NUM_SERVERS);
-	    memcpy(slot->prepare_certificate.pre_prepare.cum_acks, po_aru, sizeof(po_aru_signed_message)*NUM_SERVERS);
+            slot->complete_pre_prepare.seq_num = aru;
+            slot->complete_pre_prepare.view    = pre_prepare_specific->view;
+
+            // copy the prepare certificate in the slot
+            size = UTIL_Message_Size(pre_prepare);
+            mess = (signed_message *)((char *)pre_prepare + size);
+            while(count < 2 * VAR.Faults) {
+              size = UTIL_Message_Size(mess);
+              /* TODO better: we are leaking memory here!
+               * We should free the memory used to store prepare messages during regular execution
+               * before allocating new memory for prepare messages in PC_SET
+               */ 
+              /* if(slot->prepare_certificate.prepare[mess->machine_id] != NULL)
+		free(slot->prepare_certificate.prepare[mess->machine_id]); */
+
+	      slot->prepare_certificate.prepare[mess->machine_id] = malloc(size);
+              memcpy((char*)slot->prepare_certificate.prepare[mess->machine_id], (char*)mess, size);
+              /* end */
+              mess = (signed_message *)((char *)mess + size);
+              count++;
+            }
 
 	    slot->prepare_certificate_ready = 1;
 	    slot->collected_all_parts = 1;
@@ -606,7 +635,6 @@ void VIEW_Execute_Replay() {
 
     VIEW_Clear_Data_Structure();
 
-
     if (UTIL_I_Am_Leader()) {
 	Alarm(DEBUG, "I am new leader, starting at %d next is %d\n", DATA.ORD.ARU, replay->proof.startSeq);
 	//Resetting this really does seem to be necessary...
@@ -629,5 +657,3 @@ void VIEW_Cleanup()
 {
 
 }
-
-

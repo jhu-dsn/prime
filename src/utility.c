@@ -1,6 +1,6 @@
 /*
  * Prime.
- *     
+ *
  * The contents of this file are subject to the Prime Open-Source
  * License, Version 1.0 (the ``License''); you may not use
  * this file except in compliance with the License.  You may obtain a
@@ -10,26 +10,31 @@
  *
  * or in the file ``LICENSE.txt'' found in this distribution.
  *
- * Software distributed under the License is distributed on an AS IS basis, 
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License 
- * for the specific language governing rights and limitations under the 
+ * Software distributed under the License is distributed on an AS IS basis,
+ * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
+ * for the specific language governing rights and limitations under the
  * License.
  *
- * The Creators of Prime are:
- *  Yair Amir, Jonathan Kirsch, and John Lane.
+ * Creators:
+ *   Yair Amir            yairamir@cs.jhu.edu
+ *   Jonathan Kirsch      jak@cs.jhu.edu
+ *   John Lane            johnlane@cs.jhu.edu
+ *   Marco Platania       platania@cs.jhu.edu
  *
- * Special thanks to Brian Coan for major contributions to the design of
- * the Prime algorithm. 
- *  	
- * Copyright (c) 2008 - 2013 
+ * Major Contributors:
+ *   Brian Coan           Design of the Prime algorithm
+ *   Jeff Seibert         View Change protocol
+ *
+ * Copyright (c) 2008 - 2014
  * The Johns Hopkins University.
  * All rights reserved.
  *
- * Major Contributor(s):
- * --------------------
- *     Jeff Seibert
+ * Partial funding for Prime research was provided by the Defense Advanced
+ * Research Projects Agency (DARPA) and The National Security Agency (NSA).
+ * Prime is not necessarily endorsed by DARPA or the NSA.
  *
  */
+
 
 #include <assert.h>
 #include <netdb.h>
@@ -42,9 +47,9 @@
 #include "data_structs.h"
 #include "utility.h"
 #include "util_dll.h"
-#include "util/memory.h"
-#include "util/alarm.h"
-#include "util/data_link.h"
+#include "spu_memory.h"
+#include "spu_alarm.h"
+#include "spu_data_link.h"
 #include "objects.h"
 #include "merkle.h"
 #include "def.h"
@@ -107,7 +112,7 @@ int32u UTIL_Message_Size(signed_message *m)
 int32u UTIL_Get_Timeliness(int32u type)
 {
   int32u ret;
-
+  
   switch(type) {
     
   case PO_REQUEST:
@@ -214,6 +219,54 @@ int32u UTIL_Get_Timeliness(int32u type)
     ret = TIMELY_TRAFFIC_CLASS;
     break;
 
+  case ORD_CERT:
+    ret = BOUNDED_TRAFFIC_CLASS;
+    break;
+
+  case ORD_CERT_REPLY:
+    ret = BOUNDED_TRAFFIC_CLASS;
+    break;
+
+  case PO_CERT:
+    ret = BOUNDED_TRAFFIC_CLASS;
+    break;
+
+  case PO_CERT_REPLY:
+    ret = BOUNDED_TRAFFIC_CLASS;
+    break;
+
+  case DB_STATE_DIGEST_REQUEST:
+    ret = BOUNDED_TRAFFIC_CLASS;
+    break;
+          
+  case DB_STATE_DIGEST_REPLY:
+    ret = BOUNDED_TRAFFIC_CLASS;
+    break;          
+          
+  case DB_STATE_VALIDATION_REQUEST:
+    ret = BOUNDED_TRAFFIC_CLASS;
+    break;
+
+  case DB_STATE_VALIDATION_REPLY:
+    ret = BOUNDED_TRAFFIC_CLASS;
+    break;
+
+  case DB_STATE_TRANSFER_REQUEST:
+    ret = BOUNDED_TRAFFIC_CLASS;
+    break;
+
+  case DB_STATE_TRANSFER_REPLY:
+    ret = BOUNDED_TRAFFIC_CLASS;
+    break;
+
+  case CATCH_UP:
+    ret = BOUNDED_TRAFFIC_CLASS;
+    break;
+
+  case CATCH_UP_REPLY:
+    ret = BOUNDED_TRAFFIC_CLASS;
+    break;
+
   default:
     Alarm(PRINT, "Assigning unknown message type %d as BOUNDED\n", type);
     ret = BOUNDED_TRAFFIC_CLASS;
@@ -237,8 +290,8 @@ int32u UTIL_I_Am_Faulty()
 
 void UTIL_State_Machine_Output(signed_update_message *u)
 {
-  fprintf(BENCH.state_machine_fp, "Client: %d\tTimestamp: %d\n",
-	  u->header.machine_id, u->update.time_stamp);
+  fprintf(BENCH.state_machine_fp, "    Client: %d\tTimestamp: %d\tContent: %s\n",
+	  u->header.machine_id, u->update.time_stamp, u->update_contents);
 }
 
 char *UTIL_Type_To_String(int32u type)
@@ -359,6 +412,54 @@ char *UTIL_Type_To_String(int32u type)
     ret = "CLIENT_RESPONSE";
     break;
 
+  case ORD_CERT:
+    ret = "ORD_CERT";
+    break;
+
+  case ORD_CERT_REPLY:
+    ret = "ORD_CERT_REPLY";
+    break;
+
+  case PO_CERT:
+    ret = "PO_CERT";
+    break;
+
+  case PO_CERT_REPLY:
+    ret = "PO_CERT_REPLY";
+    break;
+          
+  case DB_STATE_DIGEST_REQUEST:
+    ret = "DB_STATE_DIGEST_REQUEST";
+    break;
+          
+  case DB_STATE_DIGEST_REPLY:
+    ret = "DB_STATE_DIGEST_REPLY";
+    break;
+
+  case DB_STATE_VALIDATION_REQUEST:
+    ret = "DB_STATE_VALIDATION_REQUEST";
+    break;
+
+  case DB_STATE_VALIDATION_REPLY:
+    ret = "DB_STATE_VALIDATION_REPLY";
+    break;
+
+  case DB_STATE_TRANSFER_REQUEST:
+    ret = "DB_STATE_TRANSFER_REQUEST";
+    break;
+
+  case DB_STATE_TRANSFER_REPLY:
+    ret = "DB_STATE_TRANSFER_REPLY";
+    break;
+
+  case CATCH_UP:
+    ret = "CATCH_UP";
+    break;
+
+  case CATCH_UP_REPLY:
+    ret = "CATCH_UP_REPLY";
+    break;
+
   default:
     ret = "UKNOWN TYPE!";
     break;
@@ -374,7 +475,11 @@ signed_message* UTIL_New_Signed_Message()
   
   if((mess = (signed_message*) new_ref_cnt(PACK_BODY_OBJ)) == NULL)
     Alarm(EXIT,"DAT_New_Signed_Message: Could not allocate memory.\n");
-  
+
+  mess->mt_num   = 0;
+  mess->mt_index = 0; 
+  mess->site_id  = 0;
+
   return mess;
 }
 
@@ -469,7 +574,7 @@ void UTIL_Send_To_Server(signed_message *mess, int32u server_id)
   /* All messages are signed using Merkle trees, so factor in the length
    * of digests. */
   scat.elements[0].len += MT_Digests_(mess->mt_num) * DIGEST_SIZE;
-  
+ 
   assert(scat.elements[0].len <= PRIME_MAX_PACKET_SIZE);
 
   Alarm(DEBUG, "Message of type %d was of len %d, now %d\n", mess->type,
@@ -923,7 +1028,7 @@ void UTIL_Write_Client_Response(signed_message *mess)
 	size, machine_id, response->seq_num);
 
   if(NET.client_sd[machine_id] == 0) {
-    Alarm(PRINT, "Unable to write reply to client %d, no open connection.\n",
+    Alarm(DEBUG, "Unable to write reply to client %d, no open connection.\n",
 	  machine_id);
     return;
   }

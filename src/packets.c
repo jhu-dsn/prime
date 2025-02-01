@@ -1,6 +1,6 @@
 /*
  * Prime.
- *     
+ *
  * The contents of this file are subject to the Prime Open-Source
  * License, Version 1.0 (the ``License''); you may not use
  * this file except in compliance with the License.  You may obtain a
@@ -10,31 +10,35 @@
  *
  * or in the file ``LICENSE.txt'' found in this distribution.
  *
- * Software distributed under the License is distributed on an AS IS basis, 
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License 
- * for the specific language governing rights and limitations under the 
+ * Software distributed under the License is distributed on an AS IS basis,
+ * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
+ * for the specific language governing rights and limitations under the
  * License.
  *
- * The Creators of Prime are:
- *  Yair Amir, Jonathan Kirsch, and John Lane.
+ * Creators:
+ *   Yair Amir            yairamir@cs.jhu.edu
+ *   Jonathan Kirsch      jak@cs.jhu.edu
+ *   John Lane            johnlane@cs.jhu.edu
+ *   Marco Platania       platania@cs.jhu.edu
  *
- * Special thanks to Brian Coan for major contributions to the design of
- * the Prime algorithm. 
- *  	
- * Copyright (c) 2008 - 2013 
+ * Major Contributors:
+ *   Brian Coan           Design of the Prime algorithm
+ *   Jeff Seibert         View Change protocol
+ *
+ * Copyright (c) 2008 - 2014
  * The Johns Hopkins University.
  * All rights reserved.
  *
- * Major Contributor(s):
- * --------------------
- *     Jeff Seibert
+ * Partial funding for Prime research was provided by the Defense Advanced
+ * Research Projects Agency (DARPA) and The National Security Agency (NSA).
+ * Prime is not necessarily endorsed by DARPA or the NSA.
  *
  */
 
 #include <string.h>
 #include <assert.h>
-#include "util/alarm.h"
-#include "util/memory.h"
+#include "spu_alarm.h"
+#include "spu_memory.h"
 #include "packets.h"
 #include "utility.h"
 #include "data_structs.h"
@@ -586,8 +590,7 @@ signed_message *SUSPECT_Construct_New_Leader_Proof()
 signed_message* RELIABLE_Construct_RB_Init(signed_message *mess) {
   signed_message *rb_init;
   signed_message *payload;
-  //UTIL_Message_Size(mess) to find size but large merkle tree values would
-  //cause an assertion
+
   int32u size = sizeof(signed_message)+mess->len;
   /* Construct new message */
   rb_init = UTIL_New_Signed_Message();
@@ -600,7 +603,6 @@ signed_message* RELIABLE_Construct_RB_Init(signed_message *mess) {
   memcpy(payload, (void*)mess, size);
 
   return rb_init;
-
 }
 
 signed_message* RELIABLE_Construct_RB_Echo(signed_message *mess) {
@@ -637,7 +639,6 @@ signed_message* RELIABLE_Construct_RB_Ready(signed_message *mess) {
   memcpy(payload, (void*)mess, size);
 
   return rb_ready;
-
 }
 
 signed_message* VIEW_Construct_Report(void) {
@@ -723,7 +724,6 @@ signed_message* VIEW_Construct_VC_Partial_Sig(int32u ids) {
     }
   }
 
-
   vc_partial_sig_specific->startSeq = startSeq;
 
   byte digest[DIGEST_SIZE];
@@ -773,7 +773,6 @@ signed_message* VIEW_Construct_Replay(vc_proof_message *proof) {
   memcpy(&replay_specific->proof, proof, sizeof(vc_proof_message));
 
   return replay;
-
 }
 
 signed_message* VIEW_Construct_Replay_Prepare(void) {
@@ -790,7 +789,6 @@ signed_message* VIEW_Construct_Replay_Prepare(void) {
   replay->len        = sizeof(replay_prepare_message);
 
   return replay;
-
 }
 
 signed_message* VIEW_Construct_Replay_Commit(void) {
@@ -807,7 +805,6 @@ signed_message* VIEW_Construct_Replay_Commit(void) {
   replay->len        = sizeof(replay_commit_message);
 
   return replay;
-
 }
 
 
@@ -895,6 +892,239 @@ signed_message *RECON_Construct_Recon_Erasure_Message(dll_struct *list,
   assert(bytes <= cutoff);
   assert(r->num_parts > 0);
   mess->len = bytes - sizeof(signed_message);
+
+  return mess;
+}
+
+/* Functions for proactive recovery */
+signed_message* RECOVERY_Construct_Ord_Cert_Message(int32u sn, int32u v) {
+
+  signed_message   *cert;
+  ord_cert_message *cert_specific;
+  
+  /* Construct new message */
+  cert          = UTIL_New_Signed_Message();
+  cert_specific = (ord_cert_message*)(cert + 1);
+
+  cert->machine_id = VAR.My_Server_ID;
+  cert->type       = ORD_CERT;
+  cert->len        = sizeof(ord_cert_message);
+
+  cert_specific->seq_num = sn;
+  cert_specific->view    = v;
+  
+  return cert;
+}
+
+signed_message* RECOVERY_Construct_Ord_Cert_Reply_Message(int32u seq_num, int32u view, char *prep, int size, complete_pre_prepare_message pre_prepare) {
+  signed_message         *cert_mess;
+  ord_cert_reply_message *cert_mess_specific;
+
+  /* Construct new message */
+  cert_mess = UTIL_New_Signed_Message();
+
+  cert_mess_specific = (ord_cert_reply_message*)(cert_mess + 1);
+
+  cert_mess->machine_id = VAR.My_Server_ID;
+  cert_mess->type       = ORD_CERT_REPLY; 
+  cert_mess->len        = sizeof(ord_cert_reply_message) + size;
+
+  cert_mess_specific->seq_num     = seq_num;
+  cert_mess_specific->view        = view;
+  cert_mess_specific->pre_prepare = pre_prepare;
+  
+  char *ptr = (char *)(cert_mess_specific + 1);
+  memcpy(ptr, prep, size);
+
+  return cert_mess;
+}
+
+signed_message* RECOVERY_Construct_PO_Cert_Message(int32u server_id, int32u seq_num) {
+
+  signed_message  *cert;
+  po_cert_message *cert_specific;
+
+  /* Construct new message */
+  cert          = UTIL_New_Signed_Message();
+  cert_specific = (po_cert_message *)(cert + 1);
+
+  cert->machine_id = VAR.My_Server_ID;
+  cert->type       = PO_CERT;
+  cert->len        = sizeof(po_cert_message);
+
+  cert_specific->server_id = server_id;
+  cert_specific->seq_num   = seq_num;
+
+  return cert;
+}
+
+signed_message* RECOVERY_Construct_PO_Cert_Reply_Message(int32u server_id, int32u seq_num, char *upd, int32u ack_count, int size) {
+  signed_message        *cert_mess;
+  po_cert_reply_message *cert_mess_specific;
+
+  /* Construct new message */
+  cert_mess = UTIL_New_Signed_Message();
+
+  cert_mess_specific = (po_cert_reply_message*)(cert_mess + 1);
+
+  cert_mess->machine_id = VAR.My_Server_ID;
+  cert_mess->type       = PO_CERT_REPLY;
+  cert_mess->len        = sizeof(po_cert_reply_message) + size;
+
+  cert_mess_specific->server_id = server_id;
+  cert_mess_specific->seq_num   = seq_num;
+  cert_mess_specific->ack_count = ack_count;
+
+  char *ptr = (char *)(cert_mess_specific + 1);
+  memcpy(ptr, upd, size);
+
+  return cert_mess;
+}
+
+signed_message* RECOVERY_Construct_DB_State_Digest_Request_Message(int32u ckpt_id) {
+  signed_message                  *mess;
+  db_state_digest_request_message *db_state_digest;
+    
+  /* Construct new message */
+  mess            = UTIL_New_Signed_Message();
+  db_state_digest = (db_state_digest_request_message *)(mess + 1);
+    
+  mess->machine_id = VAR.My_Server_ID;
+  mess->type       = DB_STATE_DIGEST_REQUEST;
+  mess->len        = sizeof(db_state_digest_request_message);
+    
+  db_state_digest->checkpoint_id = ckpt_id;
+    
+  return mess;
+}
+
+signed_message* RECOVERY_Construct_DB_State_Digest_Reply_Message(int32u ckpt_id, byte digest[], off_t size) {
+  signed_message                *mess;
+  db_state_digest_reply_message *db_state_digest;
+    
+  /* Construct new message */
+  mess            = UTIL_New_Signed_Message();
+  db_state_digest = (db_state_digest_reply_message *)(mess + 1);
+    
+  mess->machine_id = VAR.My_Server_ID;
+  mess->type       = DB_STATE_DIGEST_REPLY;
+  mess->len        = sizeof(db_state_digest_reply_message);
+    
+  db_state_digest->checkpoint_id = ckpt_id;
+  db_state_digest->state_size = size;
+  memcpy(db_state_digest->digest, digest, DIGEST_SIZE * sizeof(byte));
+    
+  return mess;
+}
+
+signed_message* RECOVERY_Construct_DB_State_Validation_Request_Message(int32u ckpt_id, int32u block) {
+  signed_message                      *mess;
+  db_state_validation_request_message *db_state_req;
+
+  /* Construct new message */
+  mess         = UTIL_New_Signed_Message();
+  db_state_req = (db_state_validation_request_message *)(mess + 1);
+
+  mess->machine_id = VAR.My_Server_ID;
+  mess->type       = DB_STATE_VALIDATION_REQUEST;
+  mess->len        = sizeof(db_state_validation_request_message);
+
+  db_state_req->checkpoint_id = ckpt_id;
+  db_state_req->data_block    = block;
+
+  return mess;
+}
+
+signed_message* RECOVERY_Construct_DB_State_Validation_Reply_Message(int32u ckpt_id, int32u block, byte digest[]) {
+  signed_message                    *mess;
+  db_state_validation_reply_message *db_state_reply;
+
+  /* Construct new message */
+  mess           = UTIL_New_Signed_Message();
+  db_state_reply = (db_state_validation_reply_message *)(mess + 1);
+
+  mess->machine_id = VAR.My_Server_ID;
+  mess->type       = DB_STATE_VALIDATION_REPLY;
+  mess->len        = sizeof(db_state_validation_reply_message);
+
+  db_state_reply->checkpoint_id = ckpt_id;
+  db_state_reply->data_block    = block;
+  memcpy(db_state_reply->digest, digest, DIGEST_SIZE * sizeof(byte));
+
+  return mess;
+}
+
+signed_message* RECOVERY_Construct_DB_State_Transfer_Request_Message(int32u ckpt_id, int32u block) {
+  signed_message                    *mess;
+  db_state_transfer_request_message *db_state_req;
+
+  /* Construct new message */
+  mess           = UTIL_New_Signed_Message();
+  db_state_req   = (db_state_transfer_request_message *)(mess + 1);
+
+  mess->machine_id = VAR.My_Server_ID;
+  mess->type       = DB_STATE_TRANSFER_REQUEST;
+  mess->len        = sizeof(db_state_transfer_request_message);
+
+  db_state_req->checkpoint_id = ckpt_id;
+  db_state_req->data_block    = block;
+  
+  return mess;
+}
+
+signed_message* RECOVERY_Construct_DB_State_Transfer_Reply_Message(int32u ckpt_it, int32u part, int32u block, char* buf, int32u size) {
+  signed_message                  *mess;
+  db_state_transfer_reply_message *db_state_reply;
+
+  /* Construct new message */
+  mess           = UTIL_New_Signed_Message();
+  db_state_reply = (db_state_transfer_reply_message *)(mess + 1);
+
+  mess->machine_id = VAR.My_Server_ID;
+  mess->type       = DB_STATE_TRANSFER_REPLY;
+  mess->len        = sizeof(db_state_transfer_reply_message) + size;
+
+  db_state_reply->checkpoint_id = ckpt_it;
+  db_state_reply->part          = part;
+  db_state_reply->bytes         = size;
+  db_state_reply->data_block    = block; 
+
+  char *ptr = (char *)(db_state_reply + 1);
+  memcpy(ptr, buf, size);
+
+  return mess;
+}
+
+signed_message* RECOVERY_Construct_Catch_Up_Message() {
+  signed_message *mess;
+
+  /* Construct new message */
+  mess = UTIL_New_Signed_Message();
+
+  mess->machine_id = VAR.My_Server_ID;
+  mess->type       = CATCH_UP;
+  mess->len        = sizeof(catch_up_message);
+
+  return mess;
+}
+
+signed_message* RECOVERY_Construct_Catch_Up_Reply_Message(int32u view, int32u seq_num, int32u srv_aru[]) {
+  signed_message         *mess;
+  catch_up_reply_message *catch_up_reply;
+  int32u i;
+
+  /* Construct new message */
+  mess           = UTIL_New_Signed_Message();
+  catch_up_reply = (catch_up_reply_message *)(mess + 1);
+
+  mess->machine_id = VAR.My_Server_ID;
+  mess->type       = CATCH_UP_REPLY;
+  mess->len        = sizeof(catch_up_reply_message);
+
+  catch_up_reply->view = view;
+  catch_up_reply->seq_num = seq_num;
+  for(i = 1; i < NUM_SERVER_SLOTS; i++)
+    catch_up_reply->aru[i] = srv_aru[i];
 
   return mess;
 }

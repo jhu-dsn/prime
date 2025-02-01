@@ -1,6 +1,6 @@
 /*
  * Prime.
- *     
+ *
  * The contents of this file are subject to the Prime Open-Source
  * License, Version 1.0 (the ``License''); you may not use
  * this file except in compliance with the License.  You may obtain a
@@ -10,24 +10,28 @@
  *
  * or in the file ``LICENSE.txt'' found in this distribution.
  *
- * Software distributed under the License is distributed on an AS IS basis, 
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License 
- * for the specific language governing rights and limitations under the 
+ * Software distributed under the License is distributed on an AS IS basis,
+ * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
+ * for the specific language governing rights and limitations under the
  * License.
  *
- * The Creators of Prime are:
- *  Yair Amir, Jonathan Kirsch, and John Lane.
+ * Creators:
+ *   Yair Amir            yairamir@cs.jhu.edu
+ *   Jonathan Kirsch      jak@cs.jhu.edu
+ *   John Lane            johnlane@cs.jhu.edu
+ *   Marco Platania       platania@cs.jhu.edu
  *
- * Special thanks to Brian Coan for major contributions to the design of
- * the Prime algorithm. 
- *  	
- * Copyright (c) 2008 - 2013 
+ * Major Contributors:
+ *   Brian Coan           Design of the Prime algorithm
+ *   Jeff Seibert         View Change protocol
+ *
+ * Copyright (c) 2008 - 2014
  * The Johns Hopkins University.
  * All rights reserved.
  *
- * Major Contributor(s):
- * --------------------
- *     Jeff Seibert
+ * Partial funding for Prime research was provided by the Defense Advanced
+ * Research Projects Agency (DARPA) and The National Security Agency (NSA).
+ * Prime is not necessarily endorsed by DARPA or the NSA.
  *
  */
 
@@ -36,8 +40,8 @@
 
 #include <stdio.h>
 #include "def.h"
-#include "util/arch.h"
-#include "util/sp_events.h"
+#include "arch.h"
+#include "spu_events.h"
 #include "stdutil/stdhash.h"
 #include "openssl_rsa.h"
 #include "stopwatch.h"
@@ -131,6 +135,8 @@ typedef struct dummy_benchmark_struct {
 
   util_stopwatch test_stopwatch;
   util_stopwatch sw;
+  util_stopwatch message_validation;
+  util_stopwatch state_transfer;
   util_stopwatch total_test_sw;
 
   FILE *state_machine_fp;
@@ -169,6 +175,10 @@ typedef struct dummy_po_data_struct {
    * (i, white_line[i]) */
   int32u white_line[NUM_SERVER_SLOTS];
 
+  /* For each client, the last executed update. It is used to 
+   * avoid duplicates. */
+  int32u client_ts[NUM_CLIENTS + 1];
+
   /* Timers */
   util_stopwatch po_request_sw;
   util_stopwatch po_ack_sw;
@@ -202,8 +212,14 @@ typedef struct dummy_po_slot {
   /* The preorder sequence number */
   int32u seq_num;           
   
+  /* A flag that indicates if the po_slot has been executed */
+  int32u executed;
+
   /* A copy of the request message */
   signed_message *po_request; 
+
+  /* A copy of received PO-ACKs for recovery */
+  signed_message *po_ack[NUM_SERVER_SLOTS];
 
   /* Tracks the acks received from each server */
   int32u ack_received[NUM_SERVER_SLOTS]; 
@@ -218,6 +234,9 @@ typedef struct dummy_ord_slot {
   /* seq number of this slot */
   int32u seq_num;		
   int32u view;
+
+  /* servers' aru at this execution point */
+  int32u aru_at_this_point[NUM_SERVER_SLOTS];
 
   /* current pre prepare */
   signed_message *pre_prepare;
@@ -247,7 +266,7 @@ typedef struct dummy_ord_slot {
   int32u prepare_certificate_ready;
   int32u sent_commit;
 
-  /* Flag to signal if a a commit certificate should be executed */
+  /* Flag to signal if a commit certificate should be executed */
   int32u execute_commit;	
 
   /* Last prepare certificate */
@@ -382,7 +401,34 @@ typedef struct dummy_signature_data_struct {
 
 } signature_data_struct;
 
+typedef struct dummy_catch_up_struct {
+  int32u seq_num[NUM_SERVERS + 1];
+  int32u view[NUM_SERVER_SLOTS];
+  int32u aru[NUM_SERVER_SLOTS];
+  int32u temp_aru[NUM_SERVER_SLOTS][NUM_SERVER_SLOTS];
+  int32u replies;
+  int32u complete;
+  int32u rec_point;
+  int32u last_buffered_mess;
+} catch_up_struct;
 
+typedef struct dummy_state_data_struct {
+  int32u checkpoint_id;
+  int32u num_of_blocks;
+  int32u parts_per_data_block;
+  off_t state_size;
+  byte digest[DIGEST_SIZE];
+  byte received_digest[DIGEST_SIZE];
+  signed_message *reply[NUM_SERVERS + 1];
+  int32u retrieved_data_blocks;
+  int32u next_data_block;
+  int32u number_of_replies;
+  int32u digest_ready;
+  int32u state_ready;
+  int32u last_written_block;
+  int32u transferring;
+  FILE *fp;
+} state_data_struct;
 
 /* This stores all of the server's state, including Preordering
  * and Ordering state. */
@@ -390,7 +436,11 @@ typedef struct dummy_server_data_struct {
   /* The view number.  For the tests, should always be 1. */
   int View;
   int32u preinstall;
-  
+
+  int32u recovery_in_progress;
+  int32u buffering_during_recovery;
+  int32u execute_batch;
+
   /* The Pre-Order data structure */
   po_data_struct PO;
   
@@ -405,5 +455,49 @@ typedef struct dummy_server_data_struct {
 
   signature_data_struct SIG;
 
+  /* The proactive recovery data structures */
+  catch_up_struct CAT;
+  state_data_struct STATE;
+
 } server_data_struct;
+
+
+/**
+ * Data structure for proactive recovery
+ */
+
+typedef struct dummy_retrieved_cert {
+  int32u seq_num;
+  int32u server_id;
+  int32u received_replies;
+  int32u validating;
+  int32u bitmask;
+  int32u val_attempt;
+  int32u certificate_ready;
+  signed_message *reply[NUM_SERVERS];
+} retrieved_cert;
+
+typedef struct dummy_data_block {
+  int32u block_number;
+  int32u state_sender_h;
+  int32u digest_sender_h;
+  stdhash parts;
+  int32u current_part;
+  char *data_buffer;
+  signed_message *digest_reply[NUM_SERVERS + 1];
+  byte block_digest[DIGEST_SIZE];
+  byte my_digest[DIGEST_SIZE];
+  int32u received_digest_replies;
+  int32u digest_ready;
+  int32u valid_block;
+  int32u block_ready;
+  int32u compromised_block;
+  int32u block_size;
+} data_block;
+
+typedef struct dummy_db_state_part {
+  int32u checkpoint_id;
+  int32u part;
+  signed_message *state_part;
+} db_state_part;
 #endif

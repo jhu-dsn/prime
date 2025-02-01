@@ -1,6 +1,6 @@
 /*
  * Prime.
- *     
+ *
  * The contents of this file are subject to the Prime Open-Source
  * License, Version 1.0 (the ``License''); you may not use
  * this file except in compliance with the License.  You may obtain a
@@ -10,24 +10,28 @@
  *
  * or in the file ``LICENSE.txt'' found in this distribution.
  *
- * Software distributed under the License is distributed on an AS IS basis, 
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License 
- * for the specific language governing rights and limitations under the 
+ * Software distributed under the License is distributed on an AS IS basis,
+ * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
+ * for the specific language governing rights and limitations under the
  * License.
  *
- * The Creators of Prime are:
- *  Yair Amir, Jonathan Kirsch, and John Lane.
+ * Creators:
+ *   Yair Amir            yairamir@cs.jhu.edu
+ *   Jonathan Kirsch      jak@cs.jhu.edu
+ *   John Lane            johnlane@cs.jhu.edu
+ *   Marco Platania       platania@cs.jhu.edu
  *
- * Special thanks to Brian Coan for major contributions to the design of
- * the Prime algorithm. 
- *  	
- * Copyright (c) 2008 - 2013 
+ * Major Contributors:
+ *   Brian Coan           Design of the Prime algorithm
+ *   Jeff Seibert         View Change protocol
+ *
+ * Copyright (c) 2008 - 2014
  * The Johns Hopkins University.
  * All rights reserved.
- * 
- * Major Contributor(s):
- * --------------------
- *     Jeff Seibert
+ *
+ * Partial funding for Prime research was provided by the Defense Advanced
+ * Research Projects Agency (DARPA) and The National Security Agency (NSA).
+ * Prime is not necessarily endorsed by DARPA or the NSA.
  *
  */
 
@@ -35,8 +39,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include "util/alarm.h"
-#include "util/memory.h"
+#include "spu_alarm.h"
+#include "spu_memory.h"
 #include "order.h"
 #include "data_structs.h"
 #include "utility.h"
@@ -225,7 +229,6 @@ void RELIABLE_Upon_Receiving_RB_Ready  (signed_message *mess) {
 }
 
 void RELIABLE_Deliver(signed_message *payload, int32u num_bytes) {
-    
     signed_message *mess = new_ref_cnt(PACK_BODY_OBJ);
     if (mess == NULL) {
 	Alarm(EXIT, "Reliable_Deliver: could not allocate space for message\n");

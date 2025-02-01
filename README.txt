@@ -27,15 +27,36 @@ Attack.  In Proceedings of the 38th IEEE/IFIP International Conference
 on Dependable Systems and Networks (DSN 2008), Anchorage, Alaska, June
 2008, pp. 197-206.
 
-The current release implements the full Prime protocol.  It is intended to be
-used to benchmark the normal-case operation of the protocol in various
-configurations (LAN, WAN, emulated WAN).  It can also be used to test the
-performance of Prime under certain types of attacks.  Specifically, the code can
-be instrumented (by setting a flag) so that the leader attempts to slow down the
-performance by causing as much delay as possible without being suspected.  The
-code can also be instrumented (by setting a flag) so that faulty servers try to
-cause the correct servers to undergo as much reconciliation as possible
+The current release is intended to be used to benchmark the protocol
+in various configurations (LAN, WAN, emulated WAN). It can also be
+used to test the performance of Prime under certain types of attacks.
+Specifically, the code can be instrumented (by setting a flag) so that 
+the leader attempts to slow down the performance by causing as much 
+delay as possible without being suspected. The code can also be
+instrumented (by setting a flag) so that faulty servers try to cause
+the correct servers to undergo as much reconciliation as possible
 (i.e., to recover missing Preorder Requests).
+
+The current release also supports proactive recovery and implements the 
+state transfer protocol that prioritizes bandwidth usage over low latency 
+described in:
+
+M. Platania, D. Obenshain, T. Tantillo, R. Sharma, Y. Amir. Towards a
+Practical Survivable Intrusion Tolerant Replication System. In Proceedings 
+of the 33th IEEE/IFIP International Sysmposium on Reliable Distributed Systems 
+(SRDS 2014), Nara, Japan, October 2014.
+
+Prime servers can be periodically rejuvenated to clean the system from 
+potentially undetected intrusions. After rejuvenation, a Prime server 
+validates the contents of the state on the disk with the help of other 
+correct replicas and recovers a clean copy of the state if necessary. 
+Subsequently, the rejuvenated replica collects all the client updates 
+necessary to catch up and resume the execution. The state and update 
+transfer protocols are guaranteed to meet Safety at any time because 
+they are coordinated by a quorum of correct replicas.
+
+By default the proactive recovery protocol is enabled. It can be turned 
+off by setting the flag RECOVERY to false in src/def.h.
 
 **************************
 * Software Dependencies: *
@@ -44,10 +65,6 @@ Prime uses the OpenSSL cryptographic library.  OpenSSL can be
 downloaded from www.openssl.org.  The Makefile is set up to
 dynamically link to to OpenSSL.  If necessary, you can modify the
 Makefile to statically link to the library libcrypto.a.
-
-Prime uses the OpenTC cryptographic library. OpenTC is a threshold
-cryptographic library and is included in this release. The OpenTC
-license is in the /OpenTC-1.1/TC-lib-1.0 directory.
 
 Prime can be configured to make use of Spines, an overlay network
 developed at Johns Hopkins (see http://spines.org).  This can be
@@ -90,7 +107,9 @@ the file is organized as follows:
 **************
 * Compiling: *
 **************
-Prime can be compiled by typing make in the src directory.  Three
+Enter the libspread-util folder and type ./configure and then make
+to build the libraries.
+Prime can be compiled by typing make in the src directory. Three
 executables will be generated and stored in the bin directory.
 The programs are gen_keys, server and client.
 
