@@ -27,7 +27,7 @@
  *   Brian Coan           Design of the Prime algorithm
  *   Jeff Seibert         View Change protocol
  *      
- * Copyright (c) 2008 - 2017
+ * Copyright (c) 2008 - 2018
  * The Johns Hopkins University.
  * All rights reserved.
  * 
@@ -47,7 +47,7 @@
 
 /* Maximum number of tolerated benign faults, including rejuvenations,
  * disconnections (network partition/attack), and crashes */
-#define NUM_K 0
+#define NUM_K 1
 
 /* Total number of replicas in the system. NUM_SERVERS must be equal to 
  * (3*NUM_F + 2*NUM_K + 1) */
@@ -62,7 +62,7 @@
 /* When running a benchmark, this value indicates how many updates
  * should be executed by the servers before stopping and outputting
  * the throughput. */
-#define BENCHMARK_END_RUN 8000000
+/* #define BENCHMARK_END_RUN 8000000 */
 
 /* Set this to 1 if an erasure encoding library is available and
  * integrated. By default, no erasure encoding is used and each
@@ -73,22 +73,22 @@
 /* Variability constant K_Lat */
 #define VARIABILITY_KLAT 2.5
 
-/* Garbage Collection Lag - To catch other replicas up, we
- * keep this many ord_slots around so that we can give them
- * commit certificates to help them catch up their ARU.
+/* Catchup History - To catch other replicas up, we
+ * keep AT LEAST this many ord_slots around so that we can give them
+ * ORD/PO certificates to help them catch up their ARU.
  * 
- * NOTE: GC_LAG must be at least 1, otherwise you don't keep
- * the previous ord_slot around to compare against in the 
- * normal case */
-#define GC_LAG 1
-#define CATCHUP_HISTORY 0
+ * NOTE: CATCHUP_HISTORY is also used for garbage collection or ordinals.
+ * If you specify CATCHUP_HISTORY of 0, replicas will always try to jump
+ * (never catchup), but garbage collection will still proceed as if the
+ * history window is size of 1. */
+#define CATCHUP_HISTORY 10
 
 /* Number of outstanding PO_requests that have not yet been executed */
 #define MAX_PO_IN_FLIGHT 20
 
 /* How often to print that Prime is making progress - based on number of
  * ordinals that have been ordered */
-#define PRINT_PROGRESS 100
+#define PRINT_PROGRESS 1000
 
 /*--------------------Networking Settings-----------------------------------*/
 
@@ -150,16 +150,22 @@
  * threshold value.  SIG_SEC and SIG_USEC are the seconds and
  * microseconds of the timeout, and SIG_THRESHOLD is the threshold
  * value. */
-#define SIG_SEC  0
+/*#define SIG_SEC  0
 #define SIG_USEC 1000
-#define SIG_THRESHOLD  128
+#define SIG_THRESHOLD  128 */
+
+#define SIG_MIN_SEC  0
+#define SIG_MIN_USEC 1000
+#define SIG_MAX_SEC  0
+#define SIG_MAX_USEC 5000
+#define SIG_THRESHOLD 64
 
 /* This is the maximum number of Merkle tree digests that may be
  * appended to a given message.  This value is dependent on
  * SIG_THRESHOLD: for example, setting SIG_THRESHOLD to 128 (2^7)
  * ensures that at most 7 digests will be appended.  Don't raise
  * SIG_THRESHOLD without raising this value! */
-#define MAX_MERKLE_DIGESTS 7
+#define MAX_MERKLE_DIGESTS 6
 
 /*---------------------------Throttling Settings----------------------------*/
 
@@ -199,6 +205,8 @@
  * right away.*/
 
 /* How often do we send a Pre-Prepare? */
+//#define PRE_PREPARE_SEC  2
+//#define PRE_PREPARE_USEC 0
 #define PRE_PREPARE_SEC  0
 #define PRE_PREPARE_USEC 20000
 
@@ -258,24 +266,57 @@
 
 /* How often do we periodically send our lastet ORD certificate to help other
  * replicas determine they are behind (and eventually get caught back up). */
-#define ORD_CERT_PERIODICALLY_SEC   2
-#define ORD_CERT_PERIODICALLY_USEC  0
+//#define ORD_CERT_PERIODICALLY_SEC   5
+//#define ORD_CERT_PERIODICALLY_USEC  0
+
+/* How often do we periodically send catchup_requests to find out if we are 
+ * behind in progress. Other replicas will not respond if we aren't behind,
+ * and will only respond according to some rate limit */
+#define CATCHUP_REQUEST_PERIODICALLY_SEC   10
+#define CATCHUP_REQUEST_PERIODICALLY_USEC  0
 
 /* How often do we allow ourselves to catchup or do we allow ourselves to
  * help others in their catching up */
-#define PR_CATCHUP_PERIOD_SEC   1
-#define PR_CATCHUP_PERIOD_USEC  0
+#define CATCHUP_PERIOD_SEC   2
+#define CATCHUP_PERIOD_USEC  0
+
+/* If we are mid-catchup round and the replica we are working with does not
+ * help us for this much time, we give up on them and ask the next replica
+ * to start helping us */
+#define CATCHUP_MOVEON_SEC      0
+#define CATCHUP_MOVEON_USEC     100000
 
 /* If we are just about to start a catching up instance, delay the instance
  * for this amount of time to potentially allow the missing message to make
  * it to me before asking for them or jumping ahead */
-#define PR_CATCHUP_EPSILON_SEC      0
-#define PR_CATCHUP_EPSILON_USEC     20000
+#define CATCHUP_EPSILON_SEC      0
+#define CATCHUP_EPSILON_USEC     20000
 
 /* How often so we retransmit messages from each phase of the protocol 
  * (e.g., PRE_ORDER, ORDER, VIEW_CHANGE, ...) */
-#define RETRANS_PERIOD_SEC  1
+#define RETRANS_PERIOD_SEC  2
 #define RETRANS_PERIOD_USEC 0
+
+/* How often replicas are allowed to recover */
+#define RECOVERY_PERIOD_SEC  10
+#define RECOVERY_PERIOD_USEC 0
+
+/* How often replicas wait before re-issuing new_incarnation messages 
+ * with a more up-to-date timestamp while trying to recover */
+#define RECOVERY_UPDATE_TIMESTAMP_SEC  4
+#define RECOVERY_UPDATE_TIMESTAMP_USEC 0
+
+/* How much time does the leader in the fresh system reset case have to
+ * collect, send out the proposal, and get the message committed before
+ * being voted out of power */
+#define SYSTEM_RESET_TIMEOUT_SEC  10
+#define SYSTEM_RESET_TIMEOUT_USEC 0
+
+/* How much time the leader (and other replicas) should wait after
+ * receving the 2f+k+1th share in order to leave "enough time" for
+ * all correct replicas' share to be received - see assumptions */
+#define SYSTEM_RESET_MIN_WAIT_SEC  2
+#define SYSTEM_RESET_MIN_WAIT_USEC 0
 
 /*-----------------------Attack Settings-----------------------------------*/
 
@@ -313,10 +354,10 @@
 #define BROADCAST                  0
 
 /* NOTE: Currently, we are relying on Spines to handle large messages,
- * in this case up to 8K messages. In the future, we should not assume
+ * in this case up to 10K messages. In the future, we should not assume
  * this and create a nice generic way to break up large messages into
  * packets for any protocol message */
-#define PRIME_MAX_PACKET_SIZE      10000
+#define PRIME_MAX_PACKET_SIZE      32000
 //#define PRIME_MAX_PACKET_SIZE      1472
 #define NUM_SERVER_SLOTS           (NUM_SERVERS+1)
 #define NUM_CLIENT_SLOTS           (NUM_CLIENTS+1)
@@ -340,7 +381,11 @@
 /* The maximum number of PO-Acks that can fit in a single packet, as a 
  * function of the maximum packet size and the number of Merkle tree 
  * digests that may be appended to the message. */
-#define MAX_ACK_PARTS  (PRIME_MAX_PACKET_SIZE - sizeof(signed_message) - sizeof(po_ack_message) - (MAX_MERKLE_DIGESTS * DIGEST_SIZE)) / sizeof(po_ack_part)
+/* #define MAX_ACK_PARTS  (PRIME_MAX_PACKET_SIZE - sizeof(signed_message) - sizeof(po_ack_message) - (MAX_MERKLE_DIGESTS * DIGEST_SIZE)) / sizeof(po_ack_part) */
+
+/* #define MAX_ACK_PARTS  ((PRIME_MAX_PACKET_SIZE - sizeof(signed_message) - sizeof(po_ack_message) - (MAX_MERKLE_DIGESTS * DIGEST_SIZE)) / (sizeof(signed_message) + sizeof(po_ack_part) + (MAX_MERKLE_DIGESTS * DIGEST_SIZE))) */
+
+#define MAX_ACK_PARTS  (PRIME_MAX_PACKET_SIZE - sizeof(signed_message) - sizeof(po_certificate_message) - (MAX_MERKLE_DIGESTS * DIGEST_SIZE) - sizeof(signed_message) - sizeof(po_request_message) - (MAX_MERKLE_DIGESTS * DIGEST_SIZE) - ((2*NUM_F + NUM_K + 1) * (sizeof(signed_message) + sizeof(po_ack_message) + (MAX_MERKLE_DIGESTS * DIGEST_SIZE)))) / ((2*NUM_F + NUM_K + 1) * sizeof(po_ack_part))
 
 /* After reading an event, we poll the socket to see if there are
  * more.  This lets us do as much reading as possible.  The threshold

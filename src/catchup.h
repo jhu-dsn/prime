@@ -37,15 +37,30 @@
  *
  */
 
-#ifndef PRIME_TCP_WRAPPER_H
-#define PRIME_TCP_WRAPPER_H
+/* Catchup Functions */
 
-#include "arch.h"
+#ifndef PRIME_CATCHUP_H
+#define PRIME_CATCHUP_H
 
-int NET_Read (int sd, void *dummy_buf, int32u nBytes);
-int NET_Write(int sd, void *dummy_buf, int32u nBytes);
+#include "data_structs.h"
 
-int IPC_Recv(int s, void *d_buf, int nBytes);
-int IPC_Send(int s, void *d_buf, int nBytes, char *dst);
+#define FLAG_CATCHUP    1
+#define FLAG_JUMP       2
+#define FLAG_PERIODIC   3
+#define FLAG_RECOVERY   4
 
-#endif
+void CATCH_Initialize_Data_Structure(void);
+void CATCH_Reset_View_Change_Catchup(void);
+void CATCH_Upon_Reset(void);
+
+void CATCH_Process_Catchup_Request(signed_message *mess);
+void CATCH_Process_ORD_Certificate(signed_message *mess);
+void CATCH_Process_PO_Certificate(signed_message *mess);
+void CATCH_Process_Jump(signed_message *mess);
+
+void CATCH_Send_Catchup_Request_Periodically(int dummy, void *dummyp);
+void CATCH_Send_ORD_Cert_Periodically(int dummy, void *dummyp);
+void CATCH_Schedule_Catchup(void);
+void CATCH_Jump_Ahead(signed_message *ord_cert);
+
+#endif /* PRIME_CATCHUP_H */
