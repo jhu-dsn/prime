@@ -1,18 +1,18 @@
 /*
  * Prime.
- *
+ *     
  * The contents of this file are subject to the Prime Open-Source
  * License, Version 1.0 (the ``License''); you may not use
  * this file except in compliance with the License.  You may obtain a
  * copy of the License at:
  *
- * http://www.dsn.jhu.edu/byzrep/prime/LICENSE.txt
+ * http://www.dsn.jhu.edu/prime/LICENSE.txt
  *
  * or in the file ``LICENSE.txt'' found in this distribution.
  *
- * Software distributed under the License is distributed on an AS IS basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
+ * Software distributed under the License is distributed on an AS IS basis, 
+ * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License 
+ * for the specific language governing rights and limitations under the 
  * License.
  *
  * Creators:
@@ -20,18 +20,20 @@
  *   Jonathan Kirsch      jak@cs.jhu.edu
  *   John Lane            johnlane@cs.jhu.edu
  *   Marco Platania       platania@cs.jhu.edu
+ *   Amy Babay            babay@cs.jhu.edu
+ *   Thomas Tantillo      tantillo@cs.jhu.edu
  *
  * Major Contributors:
  *   Brian Coan           Design of the Prime algorithm
  *   Jeff Seibert         View Change protocol
- *
- * Copyright (c) 2008 - 2014
+ *      
+ * Copyright (c) 2008 - 2017
  * The Johns Hopkins University.
  * All rights reserved.
- *
- * Partial funding for Prime research was provided by the Defense Advanced
- * Research Projects Agency (DARPA) and The National Security Agency (NSA).
- * Prime is not necessarily endorsed by DARPA or the NSA.
+ * 
+ * Partial funding for Prime research was provided by the Defense Advanced 
+ * Research Projects Agency (DARPA) and the National Science Foundation (NSF).
+ * Prime is not necessarily endorsed by DARPA or the NSF.  
  *
  */
 
@@ -40,25 +42,27 @@
 
 /*---------------------System-wide Configuration Settings-------------------*/
 
-/* PRIME for 7 server configuration */
+/* Maximum number of tolerated Byzantine faults */
+#define NUM_F 1
 
-/* Maximum number of tolerated faults */
-#define NUM_FAULTS 2
+/* Maximum number of tolerated benign faults, including rejuvenations,
+ * disconnections (network partition/attack), and crashes */
+#define NUM_K 0
 
-/* Total number of servers in the system.  NUM_SERVERS must be greater
- * than or equal to (3*NUM_FAULTS + 1) */
-#define NUM_SERVERS 7
+/* Total number of replicas in the system. NUM_SERVERS must be equal to 
+ * (3*NUM_F + 2*NUM_K + 1) */
+#define NUM_SERVERS (3*NUM_F + 2*NUM_K + 1)
 
 /* Maximum number of clients */
-#define NUM_CLIENTS 1
+#define NUM_CLIENTS 150
 
 /* Number of bytes in a client update */
-#define UPDATE_SIZE 200
+#define UPDATE_SIZE 300
 
 /* When running a benchmark, this value indicates how many updates
  * should be executed by the servers before stopping and outputting
  * the throughput. */
-#define BENCHMARK_END_RUN 3000
+#define BENCHMARK_END_RUN 8000000
 
 /* Set this to 1 if an erasure encoding library is available and
  * integrated. By default, no erasure encoding is used and each
@@ -67,22 +71,24 @@
 #define USE_ERASURE_CODES 0
 
 /* Variability constant K_Lat */
-#define VARIABILITY_KLAT 10.0
+#define VARIABILITY_KLAT 2.5
 
-/* Recovery: set this to 1 to allow recovery. Garbage collection
- * is disabled.  */
-#define RECOVERY 1
+/* Garbage Collection Lag - To catch other replicas up, we
+ * keep this many ord_slots around so that we can give them
+ * commit certificates to help them catch up their ARU.
+ * 
+ * NOTE: GC_LAG must be at least 1, otherwise you don't keep
+ * the previous ord_slot around to compare against in the 
+ * normal case */
+#define GC_LAG 1
+#define CATCHUP_HISTORY 0
 
-/* Define the maximum number of data blocks that we transfer at the
- * same time. */
-#define STATE_TRANSFER_MAX_LIMIT 5
+/* Number of outstanding PO_requests that have not yet been executed */
+#define MAX_PO_IN_FLIGHT 20
 
-/* Define the size of each data block (default: 1 megabyte). */
-#define BLOCK_SIZE 1048576
-
-/* The maximum number of bytes that are sent in each state transfer
- * message. */
-#define PAYLOAD_SIZE 1024
+/* How often to print that Prime is making progress - based on number of
+ * ordinals that have been ordered */
+#define PRINT_PROGRESS 100
 
 /*--------------------Networking Settings-----------------------------------*/
 
@@ -101,6 +107,30 @@
  * SET_USE_SPINES flag (see Makefile) or the
  * THROTTLE_OUTGOING_MESSAGES flag (see below). */
 #define USE_IP_MULTICAST 0
+
+/* Set this to 1 if Prime client and replica are co-located on the
+ * same physical machine. Using Inter-Process Communication will speed up 
+ * (in terms of latency) messaging between the client and replica when
+ * sending messages with more than just a few bytes */
+#define USE_IPC_CLIENT 1
+#define REPLICA_IPC_PATH "/tmp/prime_replica"
+#define CLIENT_IPC_PATH "/tmp/prime_client"
+
+/* Set this to 1 if Prime daemon and Spines daemon it connects to are
+ * co-located on the same physical machine */
+#define USE_SPINES_IPC 1
+
+/* For Prime over the WAN, Spines daemons can be used to represent different geographic
+ * sites, with several Prime replicas hosted at each site. To consolidate the number
+ * of messages sent over the WAN, we can use a multicast address of the form:
+ * 254.255.0.X to send to all replicas reliably */
+#define SPINES_MCAST_ADDR      "254.255.0.20"
+
+#define SPINES_CONNECT_SEC  2
+#define SPINES_CONNECT_USEC 0
+
+#define SPINES_EXP_TIME_SEC  5
+#define SPINES_EXP_TIME_USEC 0
 
 /*--------------------Crypto Settings---------------------------------------*/
 
@@ -122,14 +152,14 @@
  * value. */
 #define SIG_SEC  0
 #define SIG_USEC 1000
-#define SIG_THRESHOLD  16
+#define SIG_THRESHOLD  128
 
 /* This is the maximum number of Merkle tree digests that may be
  * appended to a given message.  This value is dependent on
  * SIG_THRESHOLD: for example, setting SIG_THRESHOLD to 128 (2^7)
  * ensures that at most 7 digests will be appended.  Don't raise
  * SIG_THRESHOLD without raising this value! */
-#define MAX_MERKLE_DIGESTS 4
+#define MAX_MERKLE_DIGESTS 7
 
 /*---------------------------Throttling Settings----------------------------*/
 
@@ -170,31 +200,17 @@
 
 /* How often do we send a Pre-Prepare? */
 #define PRE_PREPARE_SEC  0
-#define PRE_PREPARE_USEC 30000
+#define PRE_PREPARE_USEC 20000
 
 /* When sending PreOrder messages periodically, how often the timeout
  * fires (i.e, how often we check to see if we can send new
  * messages) */
 #define PO_PERIODICALLY_SEC  0
-#define PO_PERIODICALLY_USEC 3000
-
-/* How often do we send a Ping? */
-#define SUSPECT_PING_SEC  1
-#define SUSPECT_PING_USEC 0
-
-/* How often do we send turn-around-time measure messages ? */
-#define SUSPECT_TAT_MEASURE_SEC  0
-#define SUSPECT_TAT_MEASURE_USEC 500000
-
-#define SUSPECT_TAT_UB_SEC  1
-#define SUSPECT_TAT_UB_USEC 0
-
-#define SUSPECT_LEADER_SEC  0
-#define SUSPECT_LEADER_USEC 500000
+#define PO_PERIODICALLY_USEC 2000
 
 /* These flags control which PO messages are sent periodically.  Set
  * an entry to 0 to have it NOT be sent periodically. */ 
-#define SEND_PO_REQUESTS_PERIODICALLY  1
+#define SEND_PO_REQUESTS_PERIODICALLY  0
 #define SEND_PO_ACKS_PERIODICALLY      1 
 #define SEND_PO_ARU_PERIODICALLY       1
 #define SEND_PROOF_MATRIX_PERIODICALLY 1
@@ -207,6 +223,59 @@
 #define PO_ACK_PERIOD                 3
 #define PO_ARU_PERIOD                 3
 #define PROOF_MATRIX_PERIOD           3
+
+/* When sending ping messages for measuring TAT acceptable, how often
+ * we send a ping message to other replicas. */
+#define SUSPECT_PING_SEC  0
+#define SUSPECT_PING_USEC 500000
+
+/* How often do we recompute the TAT acceptable and send the latest
+ * value to all other replicas. */
+#define SUSPECT_TAT_UB_SEC  0
+#define SUSPECT_TAT_UB_USEC 500000
+
+/* This determines how often we measure the TAT so far on un-answered 
+ * Proof Matrix challenges. If there is a change during the measure, we
+ * send it right away. If there are no changes, we will still periodically
+ * send the TAT measure based on the SUSPECT_SEND_TATM timeout */
+#define SUSPECT_TAT_MEASURE_SEC  0
+#define SUSPECT_TAT_MEASURE_USEC 20000
+#define SUSPECT_SEND_TATM_SEC 0
+#define SUSPECT_SEND_TATM_USEC 500000
+#define TAT_PRINT_THRESH (PRE_PREPARE_SEC + ((PRE_PREPARE_USEC+9500)/1000000.0))
+#define MIN_RTT 0.008    /* 8 ms */
+
+/* This is how often the suspect leader timeouts should trigger during a
+ * view change. These numbers are more aggressive in the case that we need
+ * to go through multiple consecutive (nested) view changes */
+#define SUSPECT_VC_SEC  0
+#define SUSPECT_VC_USEC 500000
+
+/* How often do we send our New Leader Proof message to other replicas
+ * to help them preinstall a new view and participate in the view change */
+#define SUSPECT_NEW_LEADER_SEC   1
+#define SUSPECT_NEW_LEADER_USEC  0
+
+/* How often do we periodically send our lastet ORD certificate to help other
+ * replicas determine they are behind (and eventually get caught back up). */
+#define ORD_CERT_PERIODICALLY_SEC   2
+#define ORD_CERT_PERIODICALLY_USEC  0
+
+/* How often do we allow ourselves to catchup or do we allow ourselves to
+ * help others in their catching up */
+#define PR_CATCHUP_PERIOD_SEC   1
+#define PR_CATCHUP_PERIOD_USEC  0
+
+/* If we are just about to start a catching up instance, delay the instance
+ * for this amount of time to potentially allow the missing message to make
+ * it to me before asking for them or jumping ahead */
+#define PR_CATCHUP_EPSILON_SEC      0
+#define PR_CATCHUP_EPSILON_USEC     20000
+
+/* How often so we retransmit messages from each phase of the protocol 
+ * (e.g., PRE_ORDER, ORDER, VIEW_CHANGE, ...) */
+#define RETRANS_PERIOD_SEC  1
+#define RETRANS_PERIOD_USEC 0
 
 /*-----------------------Attack Settings-----------------------------------*/
 
@@ -243,10 +312,14 @@
 
 #define BROADCAST                  0
 
-//JCS: I increased the max packet size so that PC_Set messages could be sent in a single UDP message. We may want to change this if doing WAN experiments, if network can't handle such big UDP packets, or if using more than 4 servers. If so, will most likely need to implement a service that runs right on top of UDP that does something like fragmentation.
-
-#define PRIME_MAX_PACKET_SIZE      5000 //2500 1472 2000 
+/* NOTE: Currently, we are relying on Spines to handle large messages,
+ * in this case up to 8K messages. In the future, we should not assume
+ * this and create a nice generic way to break up large messages into
+ * packets for any protocol message */
+#define PRIME_MAX_PACKET_SIZE      10000
+//#define PRIME_MAX_PACKET_SIZE      1472
 #define NUM_SERVER_SLOTS           (NUM_SERVERS+1)
+#define NUM_CLIENT_SLOTS           (NUM_CLIENTS+1)
 
 /* We store two additional pieces of information, each an integer, in
  * the util_dll structures.  The first is referred to in the code as
@@ -273,7 +346,7 @@
  * more.  This lets us do as much reading as possible.  The threshold
  * below adjusts the maximum number of messages that will be read
  * during any one poll. If no message is available, we stop polling
- * immediately and return to the main event loop. See util/events.c */
-#define POLL_NON_LOW_PRIORITY_THRESHOLD 30000
+ * immediately and return to the main event loop. See libspread-util/events.c */
+#define POLL_NON_LOW_PRIORITY_THRESHOLD 3000
 
 #endif

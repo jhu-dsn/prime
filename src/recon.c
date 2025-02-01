@@ -1,18 +1,18 @@
 /*
  * Prime.
- *
+ *     
  * The contents of this file are subject to the Prime Open-Source
  * License, Version 1.0 (the ``License''); you may not use
  * this file except in compliance with the License.  You may obtain a
  * copy of the License at:
  *
- * http://www.dsn.jhu.edu/byzrep/prime/LICENSE.txt
+ * http://www.dsn.jhu.edu/prime/LICENSE.txt
  *
  * or in the file ``LICENSE.txt'' found in this distribution.
  *
- * Software distributed under the License is distributed on an AS IS basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
+ * Software distributed under the License is distributed on an AS IS basis, 
+ * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License 
+ * for the specific language governing rights and limitations under the 
  * License.
  *
  * Creators:
@@ -20,18 +20,20 @@
  *   Jonathan Kirsch      jak@cs.jhu.edu
  *   John Lane            johnlane@cs.jhu.edu
  *   Marco Platania       platania@cs.jhu.edu
+ *   Amy Babay            babay@cs.jhu.edu
+ *   Thomas Tantillo      tantillo@cs.jhu.edu
  *
  * Major Contributors:
  *   Brian Coan           Design of the Prime algorithm
  *   Jeff Seibert         View Change protocol
- *
- * Copyright (c) 2008 - 2014
+ *      
+ * Copyright (c) 2008 - 2017
  * The Johns Hopkins University.
  * All rights reserved.
- *
- * Partial funding for Prime research was provided by the Defense Advanced
- * Research Projects Agency (DARPA) and The National Security Agency (NSA).
- * Prime is not necessarily endorsed by DARPA or the NSA.
+ * 
+ * Partial funding for Prime research was provided by the Defense Advanced 
+ * Research Projects Agency (DARPA) and the National Science Foundation (NSF).
+ * Prime is not necessarily endorsed by DARPA or the NSF.  
  *
  */
 
@@ -46,9 +48,8 @@
 #include "erasure.h"
 #include "recon.h"
 #include "order.h"
-#include "apply.h"
+#include "process.h"
 #include "signature.h"
-#include "dispatcher.h"
 
 extern server_variables   VAR;
 extern server_data_struct DATA;
@@ -57,13 +58,14 @@ int32u RECON_Do_I_Send_Erasure(int32u machine_id,
 			       po_aru_signed_message *cum_acks);
 void RECON_Update_Recon_White_Line (void);
 
-void RECON_Upon_Receiving_Recon (signed_message *recon)
+void RECON_Process_Recon (signed_message *recon)
 {
-  int32u i;
+  int32u i, index, *ip;
   recon_message *r;
   recon_part_header *rph;
   erasure_part *part;
   recon_slot *slot;
+  po_slot *po_slot;
   char *p;
 
   r = (recon_message *)(recon + 1);
@@ -73,28 +75,74 @@ void RECON_Upon_Receiving_Recon (signed_message *recon)
 
     rph  = (recon_part_header *)p;
     part = (erasure_part *)(rph + 1);
-    
-    slot = UTIL_Get_Recon_Slot_If_Exists(rph->originator, rph->seq_num);
-
-    if(slot && slot->should_decode) {
-      Alarm(DEBUG, "Want to decode %d %d\n", rph->originator, rph->seq_num);
-      
-      /* Make sure we need this one */
-      assert(DATA.PO.white_line[rph->originator] < rph->seq_num);
-      Alarm(DEBUG, "DATA.PO.aru[%d] = %d\n",
-            rph->originator, DATA.PO.aru[rph->originator]);
-
-      slot->should_decode = 0;
-      slot->decoded       = 1;
-
-      RECON_Decode_Recon(slot);
-      /* Garbage collection is done at local execution time */
-    }
-    
-    /* Move on to the next one */
     p = (char *)part;
     p += rph->part_len;
-  }
+
+    /* If we've already contiguously collected PO-Requests for this or higher,
+     * then we must already have it. Or if I've already garbage collected
+     * this one, I must have it already*/
+    if( (PRE_ORDER_Seq_Compare(rph->seq, DATA.PO.aru[rph->originator]) <= 0) ||
+        (PRE_ORDER_Seq_Compare(rph->seq, DATA.PO.white_line[rph->originator]) <= 0)) 
+    {
+      Alarm(DEBUG, "Discarding Recon for %d %d %d from %d\n",
+	    rph->originator, rph->seq.incarnation, rph->seq.seq_num, recon->machine_id);
+
+      /* Move to the next part and continue */
+      continue;
+    }
+
+    /* Even though I haven't collected contiguously, I may have the PO
+     * request being reconciled.  Skip it in this case. */
+    po_slot = UTIL_Get_PO_Slot_If_Exists(rph->originator, rph->seq);
+    if(po_slot && po_slot->po_request) {
+      /* Move to the next part and continue */
+      continue;
+    }
+    
+    /* We want to process this part.  Store a copy of it in the slot if
+     * we need it. */
+    slot = UTIL_Get_Recon_Slot(rph->originator, rph->seq);
+
+    /* If we've already decoded this one, continue */
+    if(slot->decoded) {
+      Alarm(DEBUG, "Ignoring part for %d %d %d, already decoded\n",
+	    rph->originator, rph->seq.incarnation, rph->seq.seq_num);
+      continue;
+    }
+
+    /* We've already collected this part from this machine */
+    if(slot->part_collected[recon->machine_id] != 0)
+        continue;
+
+    /* Mark that we now have the part from this server */
+    slot->part_collected[recon->machine_id] = 1;
+    slot->num_parts_collected++;
+      
+    Alarm(DEBUG, "Stored Local Recon for (%d, %d, %d) from %d\n", 
+        rph->originator, rph->seq.incarnation, rph->seq.seq_num, recon->machine_id);
+
+    /* Copy the part into the buffer */
+    memcpy(slot->parts[recon->machine_id], part, rph->part_len);
+      
+    ip = (int32u *)(part + 1);
+    index = ip[0];
+    Alarm(DEBUG, "Part had index %d\n", index);
+
+    /* If we have enough parts, we should decode */
+    if(slot->num_parts_collected < (NUM_F + 1))
+        continue;
+        
+    /* Make sure we need this one */
+    assert(PRE_ORDER_Seq_Compare(DATA.PO.white_line[rph->originator], rph->seq) < 0);
+    Alarm(DEBUG, "DATA.PO.aru[%d] = %d %d\n",
+          rph->originator, DATA.PO.aru[rph->originator].incarnation,
+          DATA.PO.aru[rph->originator].seq_num);
+
+    slot->decoded = 1;
+    RECON_Decode_Recon(slot);
+
+    /* Note: Garbage collection is done at local execution time */
+  }      
 }
 
 void RECON_Do_Recon (ord_slot *o_slot)
@@ -106,8 +154,9 @@ void RECON_Do_Recon (ord_slot *o_slot)
   signed_message *req;
   po_request_message *rs;
   int32u gseq, i, j, k, should_send;
-  int32u prev_pop[NUM_SERVER_SLOTS];
-  int32u cur_pop[NUM_SERVER_SLOTS];
+  po_seq_pair prev_pop[NUM_SERVER_SLOTS];
+  po_seq_pair cur_pop[NUM_SERVER_SLOTS];
+  po_seq_pair ps, zero_ps = {0, 0};
   int32u dest_bits, added_to_queue;
   dll_struct message_list, node_list;
   dll_struct erasure_server_dll[NUM_SERVER_SLOTS];
@@ -142,7 +191,7 @@ void RECON_Do_Recon (ord_slot *o_slot)
   /* See which PO-Requests are now eligible for execution. */
   if(prev_ord_slot == NULL) {
     for(i = 1; i <= NUM_SERVERS; i++)
-      prev_pop[i] = 0;
+      prev_pop[i] = zero_ps;
   }
   else {
     prev_pp = &prev_ord_slot->complete_pre_prepare;
@@ -158,77 +207,87 @@ void RECON_Do_Recon (ord_slot *o_slot)
   
   UTIL_DLL_Initialize(&message_list);
   for(i = 1; i <= NUM_SERVERS; i++) {
-    for(j = prev_pop[i] + 1; j <= cur_pop[i]; j++) {
+
+    assert(prev_pop[i].incarnation <= cur_pop[i].incarnation);
+    if (prev_pop[i].incarnation < cur_pop[i].incarnation) {
+         prev_pop[i].incarnation = cur_pop[i].incarnation;
+         prev_pop[i].seq_num = 0;
+    }
+    ps.incarnation = prev_pop[i].incarnation;
+
+    for(j = prev_pop[i].seq_num + 1; j <= cur_pop[i].seq_num; j++) {
       
-      p_slot = UTIL_Get_PO_Slot_If_Exists(i, j);
+      ps.seq_num = j; 
+      p_slot = UTIL_Get_PO_Slot_If_Exists(i, ps);
 
       /* If I have this po_slot and its po_request, see if I'm supposed
        * to send a reconciliation message for it. */
       if(p_slot && (req = p_slot->po_request) != NULL) {
 
-	rs = (po_request_message *)(req + 1);
+        rs = (po_request_message *)(req + 1);
 
-	dest_bits      = 0;
-	added_to_queue = 0;
+	    dest_bits      = 0;
+	    added_to_queue = 0;
 
-	should_send = 
-	  RECON_Do_I_Send_Erasure(req->machine_id, pp->cum_acks);
+        should_send = 
+          RECON_Do_I_Send_Erasure(req->machine_id, pp->cum_acks);
 
-	if(should_send) {
+        if(should_send) {
 
-	  for(k = 1; k <= NUM_SERVERS; k++) {
-	    
-	    if(DATA.PO.cum_max_acked[k][req->machine_id] < rs->seq_num &&
-	       k != req->machine_id && 
-	       DATA.PO.Recon_Max_Sent[k][i] < rs->seq_num) {	      
+          for(k = 1; k <= NUM_SERVERS; k++) {
+            
+            if(PRE_ORDER_Seq_Compare(DATA.PO.cum_max_acked[k][req->machine_id], 
+                                        rs->seq) < 0 && k != req->machine_id)
+            {
+                //&& DATA.PO.Recon_Max_Sent[k][i] < rs->seq_num) {	      
 
-	      if(rs->seq_num % 1 == 0 && !UTIL_I_Am_Faulty())
-		Alarm(DEBUG,"RECON: Server %d found %d needs (%d, %d) "
-		      "and will send\n", VAR.My_Server_ID, k, i, j); 
-	      Alarm(DEBUG, "LastPOARU[%d][%d] = %d, rs->seq_num = %d\n",
-		    k, req->machine_id, 
-		    DATA.PO.cum_max_acked[k][req->machine_id], 
-		    rs->seq_num);
-	      
-	      /* Add the message to the list only the first time
-	       * someone needs it */
-	      if(!added_to_queue) {
+              /* if(rs->seq_num % 1 == 0 && !UTIL_I_Am_Faulty())
+                Alarm(DEBUG,"RECON: Server %d found %d needs (%d, %d) "
+                  "and will send\n", VAR.My_Server_ID, k, i, j); 
+                Alarm(DEBUG, "LastPOARU[%d][%d] = %d, rs->seq_num = %d\n",
+                k, req->machine_id, 
+                DATA.PO.cum_max_acked[k][req->machine_id], 
+                rs->seq_num); */
+              
+              /* Add the message to the list only the first time
+               * someone needs it */
+              if(!added_to_queue) {
 
-		if(USE_ERASURE_CODES == 0)  {
-		  /* If we're throttling, add the PO-Request to the queue of
-		   * pending messages directly, without signing it first. */
+                if(USE_ERASURE_CODES == 0)  {
+                  /* If we're throttling, add the PO-Request to the queue of
+                  * pending messages directly, without signing it first. */
 
-		  if(THROTTLE_OUTGOING_MESSAGES) {
-		    int32u dest_bits = 0;
-		    UTIL_Bitmap_Set(&dest_bits, k);
-		    if(!UTIL_I_Am_Faulty()) {
-		      NET_Add_To_Pending_Messages(req, dest_bits, 
-						  UTIL_Get_Timeliness(RECON));
-		    }
-		  }
-		  else {
-		    /* If we're not throttling, just send it immediately */
-		    if(!UTIL_I_Am_Faulty())
-		      UTIL_Send_To_Server(req, k);
-		  }
-		}
-		else { /* We're using erasure codes! */
-		  /* We're using erasure codes!  Add request to the queue of 
-		   * messages that need to be encoded.*/
-		  UTIL_DLL_Add_Data(&message_list, req);
-		  added_to_queue = 1;
-		  Alarm(DEBUG, "Added (%d, %d) to message list\n", i, j);
-		  
-		  DATA.PO.Recon_Max_Sent[k][i] = j;
-		}
-	      }	      
+                  if(THROTTLE_OUTGOING_MESSAGES) {
+                    int32u dest_bits = 0;
+                    UTIL_Bitmap_Set(&dest_bits, k);
+                    if(!UTIL_I_Am_Faulty()) {
+                      NET_Add_To_Pending_Messages(req, dest_bits, 
+                              UTIL_Get_Timeliness(RECON));
+                    }
+                  }
+                  else {
+                    /* If we're not throttling, just send it immediately */
+                    if(!UTIL_I_Am_Faulty())
+                      UTIL_Send_To_Server(req, k);
+                  }
+                }
+                else { /* We're using erasure codes! */
+                  /* We're using erasure codes!  Add request to the queue of 
+                   * messages that need to be encoded.*/
+                  UTIL_DLL_Add_Data(&message_list, req);
+                  added_to_queue = 1;
+                  Alarm(DEBUG, "Added (%d, %d, %d) to message list\n", i,
+                            ps.incarnation, j);
+                  //DATA.PO.Recon_Max_Sent[k][i] = j;
+                }
+              }	      
 
-	      /* Mark k as the server that needs it */
-	      UTIL_Bitmap_Set(&dest_bits, k);
-	      UTIL_DLL_Set_Last_Extra(&message_list, DEST, dest_bits);
-	    }
-	  }
-	}
+              /* Mark k as the server that needs it */
+              UTIL_Bitmap_Set(&dest_bits, k);
+              UTIL_DLL_Set_Last_Extra(&message_list, DEST, dest_bits);
+            }
+          }
+        }
       }
     }
   }
@@ -264,8 +323,8 @@ int32u RECON_Do_I_Send_Erasure(int32u machine_id,
 			       po_aru_signed_message *cum_acks)
 {
   int32u s;
-  int32u cack[ NUM_SERVER_SLOTS ];
-  int32u scack[ NUM_SERVER_SLOTS ];
+  po_seq_pair cack[ NUM_SERVER_SLOTS ];
+  po_seq_pair scack[ NUM_SERVER_SLOTS ];
   bool could_send[ NUM_SERVER_SLOTS ];
   int32u sender_count;
   
@@ -275,21 +334,21 @@ int32u RECON_Do_I_Send_Erasure(int32u machine_id,
   }
   
   /* sort the values */
-  qsort((void*)(scack+1), NUM_SERVERS, sizeof(int32u), intcmp);
+  qsort((void*)(scack+1), NUM_SERVERS, sizeof(po_seq_pair), poseqcmp);
   
   for(s = 1; s <= NUM_SERVERS; s++)
-    Alarm(DEBUG," (%d,%d) ", s, cack[s]);  
+    Alarm(DEBUG," (%d,%d,%d) ", s, cack[s].incarnation, cack[s].seq_num);  
   Alarm(DEBUG,"\n");
   
   for(s = 1; s <= NUM_SERVERS; s++) 
-    could_send[s] = (cack[s] >= scack[VAR.Faults + 1]) ? TRUE : FALSE;
-  
+    could_send[s] = (PRE_ORDER_Seq_Compare(cack[s], 
+                        scack[NUM_F + NUM_K + 1]) >= 0) ? TRUE : FALSE;
   sender_count = 0;
 
   if(could_send[VAR.My_Server_ID] == TRUE) {
     for(s = 1; s <= NUM_SERVERS; s++) {
       if(could_send[s] == TRUE) 
-	sender_count++;
+	    sender_count++;
       if(s == VAR.My_Server_ID) {
 
 #if 0
@@ -310,11 +369,11 @@ int32u RECON_Do_I_Send_Erasure(int32u machine_id,
 	}
 #endif
 	
-	return TRUE;
+	    return TRUE;
       }
 
-      if(sender_count == (2 * VAR.Faults + 1))
-	return FALSE;
+      if(sender_count == (2*NUM_F + NUM_K + 1))   /* 2f+k+1 */
+	    return FALSE;
     }
   }
   
@@ -335,8 +394,15 @@ void RECON_Update_Recon_White_Line()
       ORDER_Attempt_To_Garbage_Collect_ORD_Slot(seq);
       DATA.ORD.recon_white_line++;
     }
-    else
+    else {
+      if (seq <= DATA.ORD.ARU) Alarm(PRINT, "Update Recon white line failed for %d (white line = %d)\n", seq, DATA.ORD.recon_white_line);
+      if (slot == NULL && seq <= DATA.ORD.ARU) {
+        Alarm(PRINT, "Slot == NULL (seq %d, white line %d)\n", seq, DATA.ORD.recon_white_line);
+      } else if (seq <= DATA.ORD.ARU) {
+        Alarm(PRINT, "slot->reconciled: %d, slot->seq_num %d, slot->view %d, slot->complete_pp->seq_num %d, slot->executed %d\n", slot->reconciled, slot->seq_num, slot->view, slot->complete_pre_prepare.seq_num, slot->executed);
+      }
       break;
+    }
   }
 }
 
@@ -361,26 +427,26 @@ void RECON_Decode_Recon(recon_slot *slot)
       
       /* If we have not yet initialized the decoding, do so */
       if(initialized == 0) {
-	initialized = 1;
-	
-	assert(part->mess_len != 0);
-	message_len = part->mess_len;
-	Alarm(DEBUG, "Initialized decoding with len %d\n", message_len);
-	
-	/* Message was encoded into 3f+1 parts, f+1 of which are
-	   needed to decode. */
-	mpackets = (NUM_FAULTS+1);
-	rpackets = (2 * NUM_FAULTS);
-	
-	ERASURE_Initialize_Decoding(message_len, mpackets, rpackets);
+        initialized = 1;
+        
+        assert(part->mess_len != 0);
+        message_len = part->mess_len;
+        Alarm(DEBUG, "Initialized decoding with len %d\n", message_len);
+        
+        /* Message was encoded into 3f+1 parts, f+1 of which are
+           needed to decode. */
+        mpackets = (NUM_F + 1);
+        rpackets = (2*NUM_F + 2*NUM_K);
+        
+        ERASURE_Initialize_Decoding(message_len, mpackets, rpackets);
       }
       else {
-	if(part->mess_len != message_len) {
-	  Alarm(PRINT, "Decode Recon: "
-		"Part->mess_len = %d, message_len = %d, i = %d\n",
-		part->mess_len, message_len, i);
-	  assert(0);
-	}
+        if(part->mess_len != message_len) {
+          Alarm(PRINT, "Decode Recon: "
+            "Part->mess_len = %d, message_len = %d, i = %d\n",
+            part->mess_len, message_len, i);
+          assert(0);
+        }
       }
       
       assert(initialized);
@@ -410,13 +476,12 @@ void RECON_Decode_Recon(recon_slot *slot)
   assert(mess->type == PO_REQUEST);
   req = (po_request_message *)(mess+1);
   
-#if 1
+/* #if 1
   if(req->seq_num % 250 == 0)
     Alarm(PRINT, "Decoded %d %d\n", mess->machine_id, req->seq_num);
-#endif
+#endif */
   
-  APPLY_Message_To_Data_Structs(mess);
-  DIS_Dispatch_Message(mess);
+  PROCESS_Message(mess);
   dec_ref_cnt(mess);
 }
 
@@ -437,8 +502,8 @@ void RECON_Create_Nodes_From_Messages(dll_struct *source_list,
 
     /* We encode the message into 3f+1 parts, f+1 of which will be 
      * needed to decode. */
-    mpackets = NUM_FAULTS+1;
-    rpackets = 2*NUM_FAULTS;
+    mpackets = (NUM_F + 1);
+    rpackets = (2*NUM_F + 2*NUM_K);
     
     ERASURE_Clear();
 
@@ -460,7 +525,7 @@ void RECON_Create_Nodes_From_Messages(dll_struct *source_list,
     req = (po_request_message *)(mess + 1);
       
     n->originator = mess->machine_id;
-    n->seq_num    = req->seq_num;
+    n->seq        = req->seq;
     
     /* Encode the message and store it into the buffer */
     ERASURE_Encode(n->buf);
@@ -498,26 +563,26 @@ void RECON_Allocate_Recon_Parts_From_Nodes(dll_struct *node_list,
 
       if(UTIL_Bitmap_Is_Set(&n->dest_bits, i)) {
 
-	/* Build a new object and initialize it with encoding information */
-	ep = UTIL_New_Erasure_Part_Obj();
-	ep->part.mess_len = n->mess_len;
-	ep->mess_type     = n->mess_type;
-	ep->part_len      = n->part_len;
-	ep->originator    = n->originator;
-	ep->seq_num       = n->seq_num;
+        /* Build a new object and initialize it with encoding information */
+        ep = UTIL_New_Erasure_Part_Obj();
+        ep->part.mess_len = n->mess_len;
+        ep->mess_type     = n->mess_type;
+        ep->part_len      = n->part_len;
+        ep->originator    = n->originator;
+        ep->seq           = n->seq;
 
-	/* Copy my part into the object */
-	id = VAR.My_Server_ID;
+        /* Copy my part into the object */
+        id = VAR.My_Server_ID;
 
-	index = (id - 1) *	
-	  ((ep->part_len - sizeof(erasure_part))/sizeof(int32u));
-	memcpy(ep->buf, &n->buf[index], n->part_len - sizeof(erasure_part));
-        
-	/* Add the part to the list and maintain the destination info */
-	UTIL_DLL_Add_Data(&dest_lists[i], ep);
-	UTIL_DLL_Set_Last_Extra(&dest_lists[i], DEST, n->dest_bits);
-	dec_ref_cnt(ep);
-	assert(get_ref_cnt(ep) == 1);
+        index = (id - 1) *	
+          ((ep->part_len - sizeof(erasure_part))/sizeof(int32u));
+        memcpy(ep->buf, &n->buf[index], n->part_len - sizeof(erasure_part));
+            
+        /* Add the part to the list and maintain the destination info */
+        UTIL_DLL_Add_Data(&dest_lists[i], ep);
+        UTIL_DLL_Set_Last_Extra(&dest_lists[i], DEST, n->dest_bits);
+        dec_ref_cnt(ep);
+        assert(get_ref_cnt(ep) == 1);
       }
     }
     UTIL_DLL_Pop_Front(node_list);
@@ -544,9 +609,9 @@ void RECON_Build_Recon_Packets(dll_struct *dest_lists)
 						  &more_to_encode);
       UTIL_Bitmap_Set(&bits, i);
       if(UTIL_Bitmap_Num_Bits_Set(&bits) != 1) {
-	Alarm(PRINT, "Tried to set bit %d but num_bits_set = %d\n",
-	      i, UTIL_Bitmap_Num_Bits_Set(&bits));
-	assert(0);
+        Alarm(PRINT, "Tried to set bit %d but num_bits_set = %d\n",
+              i, UTIL_Bitmap_Num_Bits_Set(&bits));
+        assert(0);
       }
 
       /* The message needs to be RSA signed.  It is sent to those that
@@ -555,8 +620,8 @@ void RECON_Build_Recon_Packets(dll_struct *dest_lists)
       dec_ref_cnt(m);
       
       if(more_to_encode == 0) {
-	assert(UTIL_DLL_Is_Empty(&dest_lists[i]));
-	break;
+        assert(UTIL_DLL_Is_Empty(&dest_lists[i]));
+        break;
       }
     }
   }

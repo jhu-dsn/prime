@@ -1,12 +1,12 @@
 /*
- * Steward.
+ * Prime.
  *     
- * The contents of this file are subject to the Steward Open-Source
+ * The contents of this file are subject to the Prime Open-Source
  * License, Version 1.0 (the ``License''); you may not use
  * this file except in compliance with the License.  You may obtain a
  * copy of the License at:
  *
- * http://www.dsn.jhu.edu/byzrep/steward/LICENSE.txt
+ * http://www.dsn.jhu.edu/prime/LICENSE.txt
  *
  * or in the file ``LICENSE.txt'' found in this distribution.
  *
@@ -15,26 +15,36 @@
  * for the specific language governing rights and limitations under the 
  * License.
  *
- * The Creators of Steward are:
- *  Yair Amir, Claudiu Danilov, Danny Dolev, Jonathan Kirsch, John Lane,
- *  Cristina Nita-Rotaru, Josh Olsen, and David Zage.
+ * Creators:
+ *   Yair Amir            yairamir@cs.jhu.edu
+ *   Jonathan Kirsch      jak@cs.jhu.edu
+ *   John Lane            johnlane@cs.jhu.edu
+ *   Marco Platania       platania@cs.jhu.edu
+ *   Amy Babay            babay@cs.jhu.edu
+ *   Thomas Tantillo      tantillo@cs.jhu.edu
  *
- * Copyright (c) 2005 - 2010 
- * The Johns Hopkins University, Purdue University, The Hebrew University.
+ * Major Contributors:
+ *   Brian Coan           Design of the Prime algorithm
+ *   Jeff Seibert         View Change protocol
+ *      
+ * Copyright (c) 2008 - 2017
+ * The Johns Hopkins University.
  * All rights reserved.
+ * 
+ * Partial funding for Prime research was provided by the Defense Advanced 
+ * Research Projects Agency (DARPA) and the National Science Foundation (NSF).
+ * Prime is not necessarily endorsed by DARPA or the NSF.  
  *
  */
 
+//#include "openssl_rsa.h"
+//#include "spu_memory.h"
+//#include "spu_alarm.h"
+#include "utility.h"
+#include "tc_wrapper.h"
 #include "../OpenTC-1.1/TC-lib-1.0/TC.h" 
-#include "openssl_rsa.h"
-#include "data_structs.h"
-#include "arch.h"
-#include "spu_alarm.h"
-#include "spu_events.h"
-#include "spu_data_link.h"
-#include "spu_memory.h"
 
-extern server_variables VAR;
+/* extern server_variables VAR; */
 
 #define TIME_GENERATE_SIG_SHARE 0
 #define NUM_SITES 1 //JCS: don't want to modify whole thing, so just defined this here...
@@ -61,31 +71,30 @@ void assert_except(int ret, int except, char *s) {
   }
 }
 
-void TC_Read_Partial_Key( int32u server_no, int32u site_id ) {
-
+void TC_Read_Partial_Key( int32u server_no, int32u site_id ) 
+{
     char buf[100];
     char dir[100] = "./keys";
  
     sprintf(buf, "%s/share%d_%d.pem", dir, server_no - 1, site_id );
     tc_partial_key = (TC_IND *)TC_read_share(buf);
- 
 }
 
-void TC_Read_Public_Key() {
-
+void TC_Read_Public_Key() 
+{
     int32u nsite;
     
     char buf[100];
     char dir[100] = "./keys";
 
     for ( nsite = 1; nsite <= NUM_SITES; nsite++ ) {
-	sprintf(buf,"%s/pubkey_%d.pem", dir, nsite);
-	tc_public_key[nsite] = (TC_PK *)TC_read_public_key(buf);
+	    sprintf(buf,"%s/pubkey_%d.pem", dir, nsite);
+	    tc_public_key[nsite] = (TC_PK *)TC_read_public_key(buf);
     }
 }
 
-int32u TC_Generate_Sig_Share( byte* destination, byte* hash  ) { 
-
+int32u TC_Generate_Sig_Share( byte* destination, byte* hash  ) 
+{ 
     /* Generate a signature share without the proof. */
     
     TC_IND_SIG *signature;
@@ -139,21 +148,20 @@ int32u TC_Generate_Sig_Share( byte* destination, byte* hash  ) {
     end = E_get_time();
 
     diff = E_sub_time(end, start);
-    Alarm(PRINT, "Gen sig share: %d sec; %d microsec\n", diff.sec, diff.usec);
+    //Alarm(PRINT, "Gen sig share: %d sec; %d microsec\n", diff.sec, diff.usec);
+    printf("Gen sig share: %d sec; %d microsec\n", diff.sec, diff.usec);
 #endif
 
     return length;
-
 }
 
-void TC_Initialize_Combine_Phase( int32u number ) {
-
+void TC_Initialize_Combine_Phase( int32u number ) 
+{
     tc_partial_signatures = TC_SIG_Array_new( number );
-
 }
 
-void TC_Add_Share_To_Be_Combined( int server_no, byte *share ) {
-
+void TC_Add_Share_To_Be_Combined( int server_no, byte *share ) 
+{
     /* Convert share to bignum. */
 
     TC_IND_SIG *signature;
@@ -169,17 +177,15 @@ void TC_Add_Share_To_Be_Combined( int server_no, byte *share ) {
 #endif
 
     set_TC_SIG(server_no, signature, tc_partial_signatures );
-
 }
 
-void TC_Destruct_Combine_Phase( int32u number ) {
-    
+void TC_Destruct_Combine_Phase( int32u number ) 
+{
     TC_SIG_Array_free( tc_partial_signatures, number );
-    
 }
-    
-void TC_Combine_Shares( byte *signature_dest, byte *digest ) {
- 
+
+void TC_Combine_Shares( byte *signature_dest, byte *digest ) 
+{
     TC_SIG combined_signature;
     BIGNUM *hash_bn;
     int32u ret;
@@ -229,11 +235,10 @@ void TC_Combine_Shares( byte *signature_dest, byte *digest ) {
     BN_free( combined_signature );
     BN_free( bn );
     BN_free( hash_bn );
-
 }
 
-int32u TC_Verify_Signature( int32u site, byte *signature, byte *digest ) {
-
+int32u TC_Verify_Signature( int32u site, byte *signature, byte *digest ) 
+{
     BIGNUM *hash_bn;
     int32u ret;
     BIGNUM *sig_bn;
@@ -257,19 +262,35 @@ int32u TC_Verify_Signature( int32u site, byte *signature, byte *digest ) {
     return ret;
 }
 
+int TC_Check_Share( byte* digest, int32u sender_id )
+{
+    int ret;
+    BIGNUM *hash_bn;
+
+    hash_bn = BN_bin2bn( digest, DIGEST_SIZE, NULL );
+    
+    ret = TC_Check_Proof(tc_partial_key, hash_bn, 
+                          tc_partial_signatures[sender_id - 1], 
+                          sender_id);
+
+    BN_free( hash_bn );
+    return ret;
+}
+
 /* The following function generate the threshold shares and store them on disk. */
 
-void TC_Generate()
+void TC_Generate(int req_shares, char *directory)
 {
 	TC_DEALER *dealer; //[NUM_SITES+1];
 	int nsite;
-
-	int faults, n, k, keysize, num_sites;
+	int faults, rej_servers, n, k, keysize, num_sites;
 
 	keysize = 1024;
-	faults = NUM_FAULTS;
-	n = 3*faults+1;
-	k = 2*faults+1;
+	faults = NUM_F;
+    rej_servers = NUM_K;
+    n = 3*faults+ 2*rej_servers +1;
+	k = req_shares;
+	//k = 2*faults+ rej_servers +1;
 	num_sites = NUM_SITES;
 
 	for ( nsite = 1; nsite <= num_sites; nsite++ ) {
@@ -278,11 +299,8 @@ void TC_Generate()
 		/* while ( dealer == NULL ) */
 		dealer = TC_generate(keysize/2, n, k, 17);
 
-		TC_write_shares(dealer, "./keys", nsite);
+		TC_write_shares(dealer, directory, nsite);
 		TC_DEALER_free(dealer);
 	}
 
 }
-
-
-

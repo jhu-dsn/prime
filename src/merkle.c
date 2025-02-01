@@ -1,18 +1,18 @@
 /*
  * Prime.
- *
+ *     
  * The contents of this file are subject to the Prime Open-Source
  * License, Version 1.0 (the ``License''); you may not use
  * this file except in compliance with the License.  You may obtain a
  * copy of the License at:
  *
- * http://www.dsn.jhu.edu/byzrep/prime/LICENSE.txt
+ * http://www.dsn.jhu.edu/prime/LICENSE.txt
  *
  * or in the file ``LICENSE.txt'' found in this distribution.
  *
- * Software distributed under the License is distributed on an AS IS basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
+ * Software distributed under the License is distributed on an AS IS basis, 
+ * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License 
+ * for the specific language governing rights and limitations under the 
  * License.
  *
  * Creators:
@@ -20,18 +20,20 @@
  *   Jonathan Kirsch      jak@cs.jhu.edu
  *   John Lane            johnlane@cs.jhu.edu
  *   Marco Platania       platania@cs.jhu.edu
+ *   Amy Babay            babay@cs.jhu.edu
+ *   Thomas Tantillo      tantillo@cs.jhu.edu
  *
  * Major Contributors:
  *   Brian Coan           Design of the Prime algorithm
  *   Jeff Seibert         View Change protocol
- *
- * Copyright (c) 2008 - 2014
+ *      
+ * Copyright (c) 2008 - 2017
  * The Johns Hopkins University.
  * All rights reserved.
- *
- * Partial funding for Prime research was provided by the Defense Advanced
- * Research Projects Agency (DARPA) and The National Security Agency (NSA).
- * Prime is not necessarily endorsed by DARPA or the NSA.
+ * 
+ * Partial funding for Prime research was provided by the Defense Advanced 
+ * Research Projects Agency (DARPA) and the National Science Foundation (NSF).
+ * Prime is not necessarily endorsed by DARPA or the NSF.  
  *
  */
 
@@ -66,7 +68,7 @@ int32 MT_Digests_( int32 n )
   if ( n <= 32 ) return 5;
   if ( n <= 64 ) return 6;
   if ( n <= 128) return 7; 
-  if ( n <= 256) return 8;
+  if ( n <= 256) return 8; 
 
   Alarm(EXIT, "Probable bug: Should probably never happen? %d\n", n);
   return -1;
@@ -215,7 +217,7 @@ int32 MT_Verify( signed_message *mess )
 {
   byte digest[DIGEST_SIZE];
   /*byte *mtopt;*/
-  byte *proot = NULL;
+  byte *proot;
   int32 ret;
   byte *digests;
   
@@ -235,6 +237,8 @@ int32 MT_Verify( signed_message *mess )
 
     MT_Clear_Verify();
 
+    /* AB: digest is over everything except signature (SIGNATURE_SIZE), mt_num
+     * (int16u), and mt_index (int16u) (excluding merkle digests themselves) */
     OPENSSL_RSA_Make_Digest((char*)mess + SIGNATURE_SIZE + (2*sizeof(int16u)), 
 			    mess->len + sizeof(signed_message) - 
 			    SIGNATURE_SIZE - (2*sizeof(int16u)),
@@ -256,8 +260,8 @@ int32 MT_Verify( signed_message *mess )
     Alarm(PRINT,"MT Verify bad RSA Sig n=%d mtn=%d type=%d sid=%d di=%d\n",
 	  mess->mt_index, mess->mt_num, mess->type, mess->site_id, 
 	  MT_Digests_(mess->mt_num));
-    Alarm(PRINT,"YY->"); OPENSSL_RSA_Print_Digest(proot);
-    OPENSSL_RSA_Print_Digest(digest); 
+    //Alarm(PRINT,"YY->"); OPENSSL_RSA_Print_Digest(proot);
+    //OPENSSL_RSA_Print_Digest(digest); 
   }
   
   return ret; 
@@ -288,6 +292,7 @@ byte* MT_Make_Digest_From_List(dll_struct *list)
 
   memset(digest, 0, sizeof(digest));
   while((mess = (signed_message *)UTIL_DLL_Get_Signed_Message(list)) != NULL) {
+    
     OPENSSL_RSA_Make_Digest((char*)mess + SIGNATURE_SIZE + (2*sizeof(int16u)),
        mess->len + sizeof(signed_message) - SIGNATURE_SIZE -(2*sizeof(int16u)),
 			    digest);

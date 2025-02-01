@@ -1,18 +1,18 @@
 /*
  * Prime.
- *
+ *     
  * The contents of this file are subject to the Prime Open-Source
  * License, Version 1.0 (the ``License''); you may not use
  * this file except in compliance with the License.  You may obtain a
  * copy of the License at:
  *
- * http://www.dsn.jhu.edu/byzrep/prime/LICENSE.txt
+ * http://www.dsn.jhu.edu/prime/LICENSE.txt
  *
  * or in the file ``LICENSE.txt'' found in this distribution.
  *
- * Software distributed under the License is distributed on an AS IS basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
+ * Software distributed under the License is distributed on an AS IS basis, 
+ * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License 
+ * for the specific language governing rights and limitations under the 
  * License.
  *
  * Creators:
@@ -20,21 +20,22 @@
  *   Jonathan Kirsch      jak@cs.jhu.edu
  *   John Lane            johnlane@cs.jhu.edu
  *   Marco Platania       platania@cs.jhu.edu
+ *   Amy Babay            babay@cs.jhu.edu
+ *   Thomas Tantillo      tantillo@cs.jhu.edu
  *
  * Major Contributors:
  *   Brian Coan           Design of the Prime algorithm
  *   Jeff Seibert         View Change protocol
- *
- * Copyright (c) 2008 - 2014
+ *      
+ * Copyright (c) 2008 - 2017
  * The Johns Hopkins University.
  * All rights reserved.
- *
- * Partial funding for Prime research was provided by the Defense Advanced
- * Research Projects Agency (DARPA) and The National Security Agency (NSA).
- * Prime is not necessarily endorsed by DARPA or the NSA.
+ * 
+ * Partial funding for Prime research was provided by the Defense Advanced 
+ * Research Projects Agency (DARPA) and the National Science Foundation (NSF).
+ * Prime is not necessarily endorsed by DARPA or the NSF.  
  *
  */
-
 
 #include <assert.h>
 #include <netdb.h>
@@ -46,6 +47,7 @@
 #include <stdlib.h>
 #include "data_structs.h"
 #include "utility.h"
+#include "network.h"
 #include "util_dll.h"
 #include "spu_memory.h"
 #include "spu_alarm.h"
@@ -53,12 +55,12 @@
 #include "objects.h"
 #include "merkle.h"
 #include "def.h"
-#include "tcp_wrapper.h"
+#include "net_wrapper.h"
 #include "signature.h"
 #include "order.h"
 
 #ifdef SET_USE_SPINES
-#include "../spines/spines_lib.h"
+#include "spines_lib.h"
 #endif
 
 /* The globally accessible variables */
@@ -103,6 +105,25 @@ int doublecmp(const void *n1, const void *n2)
   return 0;
 }
 
+int poseqcmp(const void *n1, const void *n2)
+{
+  po_seq_pair p1;
+  po_seq_pair p2;
+
+  p1 = *((po_seq_pair*)n1);
+  p2 = *((po_seq_pair*)n2);
+
+  if (p1.incarnation < p2.incarnation)
+     return -1;
+   else if (p1.incarnation > p2.incarnation)
+     return 1;
+   else if (p1.seq_num < p2.seq_num)
+     return -1;
+   else if (p1.seq_num > p2.seq_num)
+     return 1;
+   return 0;
+}
+
 int32u UTIL_Message_Size(signed_message *m)
 {
   return (sizeof(signed_message) + m->len + 
@@ -112,7 +133,7 @@ int32u UTIL_Message_Size(signed_message *m)
 int32u UTIL_Get_Timeliness(int32u type)
 {
   int32u ret;
-  
+
   switch(type) {
     
   case PO_REQUEST:
@@ -120,11 +141,11 @@ int32u UTIL_Get_Timeliness(int32u type)
     break;
     
   case PO_ACK:
-    ret = TIMELY_TRAFFIC_CLASS;
+    ret = BOUNDED_TRAFFIC_CLASS;
     break;
 
   case PO_ARU:
-    ret = TIMELY_TRAFFIC_CLASS;
+    ret = BOUNDED_TRAFFIC_CLASS;
     break;
     
   case RECON:
@@ -133,6 +154,22 @@ int32u UTIL_Get_Timeliness(int32u type)
 
   case PROOF_MATRIX:
     ret = TIMELY_TRAFFIC_CLASS;
+    break;
+    
+  case PRE_PREPARE:
+    ret = TIMELY_TRAFFIC_CLASS;
+    break;
+    
+  case PREPARE:
+    ret = BOUNDED_TRAFFIC_CLASS;
+    break;
+    
+  case COMMIT:
+    ret = BOUNDED_TRAFFIC_CLASS;
+    break;
+
+  case TAT_MEASURE:
+    ret = BOUNDED_TRAFFIC_CLASS;
     break;
 
   case RTT_PING:
@@ -151,31 +188,11 @@ int32u UTIL_Get_Timeliness(int32u type)
     ret = BOUNDED_TRAFFIC_CLASS;
     break;
 
-  case TAT_MEASURE:
-    ret = BOUNDED_TRAFFIC_CLASS;
-    break;
-
   case NEW_LEADER:
     ret = BOUNDED_TRAFFIC_CLASS;
     break;
 
   case NEW_LEADER_PROOF:
-    ret = BOUNDED_TRAFFIC_CLASS;
-    break;
-    
-  case PRE_PREPARE:
-    ret = TIMELY_TRAFFIC_CLASS;
-    break;
-    
-  case PREPARE:
-    ret = TIMELY_TRAFFIC_CLASS;
-    break;
-    
-  case COMMIT:
-    ret = TIMELY_TRAFFIC_CLASS;
-    break;
-
-  case REPORT:  
     ret = BOUNDED_TRAFFIC_CLASS;
     break;
 
@@ -191,82 +208,54 @@ int32u UTIL_Get_Timeliness(int32u type)
     ret = BOUNDED_TRAFFIC_CLASS;
     break;
 
-  case PC_SET:  
+  case REPORT:
     ret = BOUNDED_TRAFFIC_CLASS;
     break;
 
-  case VC_LIST:  
+  case PC_SET:
     ret = BOUNDED_TRAFFIC_CLASS;
     break;
 
-  case VC_PARTIAL_SIG:  
+  case VC_LIST:
     ret = BOUNDED_TRAFFIC_CLASS;
     break;
 
-  case REPLAY_PREPARE:  
+  case VC_PARTIAL_SIG:
     ret = BOUNDED_TRAFFIC_CLASS;
     break;
 
-  case REPLAY_COMMIT:  
-    ret = BOUNDED_TRAFFIC_CLASS;
-    break;
-
-  case VC_PROOF:  
+  case VC_PROOF:
     ret = TIMELY_TRAFFIC_CLASS;
     break;
 
-  case REPLAY:  
+  case REPLAY:
     ret = TIMELY_TRAFFIC_CLASS;
     break;
 
+  case REPLAY_PREPARE:
+    ret = BOUNDED_TRAFFIC_CLASS;
+    break;
+
+  case REPLAY_COMMIT:
+    ret = BOUNDED_TRAFFIC_CLASS;
+    break;
+   
+  case CATCHUP_REQUEST:
+    ret = BOUNDED_TRAFFIC_CLASS;
+    break;
+   
   case ORD_CERT:
     ret = BOUNDED_TRAFFIC_CLASS;
     break;
-
-  case ORD_CERT_REPLY:
-    ret = BOUNDED_TRAFFIC_CLASS;
-    break;
-
+   
   case PO_CERT:
     ret = BOUNDED_TRAFFIC_CLASS;
     break;
-
-  case PO_CERT_REPLY:
+   
+  /* case CATCHUP_REPLY:
     ret = BOUNDED_TRAFFIC_CLASS;
-    break;
-
-  case DB_STATE_DIGEST_REQUEST:
-    ret = BOUNDED_TRAFFIC_CLASS;
-    break;
-          
-  case DB_STATE_DIGEST_REPLY:
-    ret = BOUNDED_TRAFFIC_CLASS;
-    break;          
-          
-  case DB_STATE_VALIDATION_REQUEST:
-    ret = BOUNDED_TRAFFIC_CLASS;
-    break;
-
-  case DB_STATE_VALIDATION_REPLY:
-    ret = BOUNDED_TRAFFIC_CLASS;
-    break;
-
-  case DB_STATE_TRANSFER_REQUEST:
-    ret = BOUNDED_TRAFFIC_CLASS;
-    break;
-
-  case DB_STATE_TRANSFER_REPLY:
-    ret = BOUNDED_TRAFFIC_CLASS;
-    break;
-
-  case CATCH_UP:
-    ret = BOUNDED_TRAFFIC_CLASS;
-    break;
-
-  case CATCH_UP_REPLY:
-    ret = BOUNDED_TRAFFIC_CLASS;
-    break;
-
+    break; */
+   
   default:
     Alarm(PRINT, "Assigning unknown message type %d as BOUNDED\n", type);
     ret = BOUNDED_TRAFFIC_CLASS;
@@ -279,8 +268,8 @@ int32u UTIL_I_Am_Faulty()
 {
   int32u ret;
 
-  /* The first NUM_FAULTS servers are the ones considered faulty */
-  if(RECON_ATTACK && (VAR.My_Server_ID <= NUM_FAULTS))
+  /* The first NUM_F servers are the ones considered faulty */
+  if(RECON_ATTACK && (VAR.My_Server_ID <= NUM_F))
     ret = 1;
   else
     ret = 0;
@@ -288,10 +277,65 @@ int32u UTIL_I_Am_Faulty()
   return ret;
 }
 
+int16u UTIL_Get_Priority(int type)
+{
+  int16u prio = 0;
+
+  switch(type) {
+    
+    case PO_REQUEST: 
+    case PO_ACK: 
+    case PO_ARU:
+    case PREPARE:
+    case COMMIT:
+    case RECON:
+    case TAT_MEASURE: 
+    case RTT_MEASURE: 
+    case TAT_UB:
+    case NEW_LEADER:
+    case NEW_LEADER_PROOF:
+    case RB_INIT:
+    case RB_ECHO:
+    case RB_READY:
+    case REPORT:
+    case PC_SET:
+    case VC_LIST:
+    case VC_PARTIAL_SIG:
+    case REPLAY_PREPARE:
+    case REPLAY_COMMIT:
+    case CATCHUP_REQUEST:
+    case ORD_CERT:
+    case PO_CERT:
+    //case CATCHUP_REPLY:
+    case UPDATE:
+    case CLIENT_RESPONSE:
+        prio = 2;
+        break;
+
+    case RTT_PING: 
+    case RTT_PONG:
+        prio = 4;
+        break;
+
+    case PROOF_MATRIX: 
+    case PRE_PREPARE:
+    case VC_PROOF:
+    case REPLAY:
+        prio = 6;
+        break;
+
+    default:
+        Alarm(PRINT, "Unknown type in UTIL_Get_Priority: %d\n", type);
+        break;
+  }
+
+  return prio;
+}
+
 void UTIL_State_Machine_Output(signed_update_message *u)
 {
-  fprintf(BENCH.state_machine_fp, "    Client: %d\tTimestamp: %d\tContent: %s\n",
-	  u->header.machine_id, u->update.time_stamp, u->update_contents);
+  /* fprintf(BENCH.state_machine_fp, "Client: %d\tTimestamp: %d\n",
+	  u->header.machine_id, u->update.time_stamp); */
 }
 
 char *UTIL_Type_To_String(int32u type)
@@ -328,20 +372,24 @@ char *UTIL_Type_To_String(int32u type)
     ret = "COMMIT";
     break;
 
-  case RTT_PING:
-    ret = "RTT_PING";
-    break;
-    
-  case RTT_PONG:
-    ret = "RTT_PONG";
-    break;
-    
-  case RTT_MEASURE:
-    ret = "RTT_MEASURE";
+  case RECON:
+    ret = "RECON";
     break;
 
   case TAT_MEASURE:
     ret = "TAT_MEASURE";
+    break;
+
+  case RTT_PING:
+    ret = "RTT_PING";
+    break;
+
+  case RTT_PONG:
+    ret = "RTT_PONG";
+    break;
+
+  case RTT_MEASURE:
+    ret = "RTT_MEASURE";
     break;
 
   case TAT_UB:
@@ -400,9 +448,21 @@ char *UTIL_Type_To_String(int32u type)
     ret = "REPLAY_COMMIT";
     break;
 
-  case RECON:
-    ret = "RECON";
+  case CATCHUP_REQUEST:
+    ret = "CATCHUP_REQUEST";
     break;
+
+  case ORD_CERT:
+    ret = "ORD_CERT";
+    break;
+
+  case PO_CERT:
+    ret = "PO_CERT";
+    break;
+
+  /*case CATCHUP_REPLY:
+    ret = "CATCHUP_REPLY";
+    break; */
 
   case UPDATE:
     ret = "UPDATE";
@@ -410,54 +470,6 @@ char *UTIL_Type_To_String(int32u type)
 
   case CLIENT_RESPONSE:
     ret = "CLIENT_RESPONSE";
-    break;
-
-  case ORD_CERT:
-    ret = "ORD_CERT";
-    break;
-
-  case ORD_CERT_REPLY:
-    ret = "ORD_CERT_REPLY";
-    break;
-
-  case PO_CERT:
-    ret = "PO_CERT";
-    break;
-
-  case PO_CERT_REPLY:
-    ret = "PO_CERT_REPLY";
-    break;
-          
-  case DB_STATE_DIGEST_REQUEST:
-    ret = "DB_STATE_DIGEST_REQUEST";
-    break;
-          
-  case DB_STATE_DIGEST_REPLY:
-    ret = "DB_STATE_DIGEST_REPLY";
-    break;
-
-  case DB_STATE_VALIDATION_REQUEST:
-    ret = "DB_STATE_VALIDATION_REQUEST";
-    break;
-
-  case DB_STATE_VALIDATION_REPLY:
-    ret = "DB_STATE_VALIDATION_REPLY";
-    break;
-
-  case DB_STATE_TRANSFER_REQUEST:
-    ret = "DB_STATE_TRANSFER_REQUEST";
-    break;
-
-  case DB_STATE_TRANSFER_REPLY:
-    ret = "DB_STATE_TRANSFER_REPLY";
-    break;
-
-  case CATCH_UP:
-    ret = "CATCH_UP";
-    break;
-
-  case CATCH_UP_REPLY:
-    ret = "CATCH_UP_REPLY";
     break;
 
   default:
@@ -476,10 +488,7 @@ signed_message* UTIL_New_Signed_Message()
   if((mess = (signed_message*) new_ref_cnt(PACK_BODY_OBJ)) == NULL)
     Alarm(EXIT,"DAT_New_Signed_Message: Could not allocate memory.\n");
 
-  mess->mt_num   = 0;
-  mess->mt_index = 0; 
-  mess->site_id  = 0;
-
+  memset(mess, 0, sizeof(packet_body));
   return mess;
 }
 
@@ -530,11 +539,17 @@ void UTIL_Load_Addresses()
 			  &server, &ip1,&ip2,&ip3,&ip4);
     Alarm(DEBUG,"%d %d %d %d %d\n", ip1, ip2, ip3, ip4, num_assigned);
     if (num_assigned == 5) {
-      /* Store the address */
-      NET.server_address[server] = 
-	( (ip1 << 24 ) | (ip2 << 16) | (ip3 << 8) | ip4 );
+      if (server <= NUM_SERVERS && server > 0) {
+        /* Store the address */
+        NET.server_address[server] = 
+          ( (ip1 << 24 ) | (ip2 << 16) | (ip3 << 8) | ip4 );
+      } else {
+        Alarm(PRINT, "WARNING: Config includes server %d outside valid range (1 - %d)...ignoring\n", server, NUM_SERVERS);
+      }
     }
   }
+
+  fclose(f);
 
 #ifdef SET_USE_SPINES
   UTIL_Load_Spines_Addresses();
@@ -562,8 +577,10 @@ void UTIL_Send_To_Server(signed_message *mess, int32u server_id)
   int32 address;
   int32 ret;
 #ifdef SET_USE_SPINES
+  int16u prio;
   int32u length;
   struct sockaddr_in dest_addr;
+  sp_time t = {SPINES_CONNECT_SEC, SPINES_CONNECT_USEC};
 #endif
 
   /* Send a signed message to a server */
@@ -574,7 +591,7 @@ void UTIL_Send_To_Server(signed_message *mess, int32u server_id)
   /* All messages are signed using Merkle trees, so factor in the length
    * of digests. */
   scat.elements[0].len += MT_Digests_(mess->mt_num) * DIGEST_SIZE;
- 
+  
   assert(scat.elements[0].len <= PRIME_MAX_PACKET_SIZE);
 
   Alarm(DEBUG, "Message of type %d was of len %d, now %d\n", mess->type,
@@ -605,7 +622,10 @@ void UTIL_Send_To_Server(signed_message *mess, int32u server_id)
 
 #else
   if(NET.program_type == NET_SERVER_PROGRAM_TYPE) {
-      
+     
+    if (NET.Spines_Channel == -1)
+        return;
+
     address = UTIL_Get_Server_Spines_Address(server_id);
     
     Alarm(DEBUG, "%d SENDING with spines: To %d "IPF" port: %d \n",
@@ -618,15 +638,42 @@ void UTIL_Send_To_Server(signed_message *mess, int32u server_id)
 
     length = (mess->len + sizeof(signed_message) + 
 	      (MT_Digests_(mess->mt_num) * DIGEST_SIZE));
+   
+    if (DATA.VIEW.view_change_done == 0 && 
+        address != UTIL_Get_Server_Spines_Address(VAR.My_Server_ID)) 
+    {
+        DATA.VIEW.vc_stats_send_count[mess->type]++;
+        if (DATA.VIEW.vc_stats_send_count[mess->type] == 1)
+            DATA.VIEW.vc_stats_send_size[mess->type] = length;
+        DATA.VIEW.vc_stats_sent_bytes += length;
+    }
+        
+    //printf("  sending type %s to %d\n", UTIL_Type_To_String(mess->type), server_id);
+    prio = UTIL_Get_Priority(mess->type); 
+    assert(prio != 0);
+
+    if (spines_setsockopt(NET.Spines_Channel, 0, SPINES_SET_PRIORITY, (void *)&prio, sizeof(int16u)) < 0) {
+        Alarm(PRINT, "UTIL_Send_To_Server: error setting priority via setsockopt\n");
+        E_detach_fd(NET.Spines_Channel, READ_FD);
+        spines_close(NET.Spines_Channel);
+        NET.Spines_Channel = -1; 
+        if (!E_in_queue(Initialize_Spines, 0, NULL))
+          E_queue(Initialize_Spines, 0, NULL, t); 
+        return; 
+    }
     
     ret = spines_sendto(NET.Spines_Channel, mess, length, 0, 
 			(struct sockaddr *)&dest_addr, 
 			sizeof(struct sockaddr));
     
     if(ret != length) {
-      Alarm(PRINT, "spines_sendto returned length %d, expected %d\n",
-	    ret, length);
-      exit(0);
+        Alarm(PRINT, "spines_sendto returned length %d, expected %d\n", ret, length);
+        E_detach_fd(NET.Spines_Channel, READ_FD);
+        spines_close(NET.Spines_Channel);
+        NET.Spines_Channel = -1; 
+        if (!E_in_queue(Initialize_Spines, 0, NULL))
+          E_queue(Initialize_Spines, 0, NULL, t); 
+        return; 
     }
   } 
 #endif
@@ -637,6 +684,14 @@ void UTIL_Send_To_Server(signed_message *mess, int32u server_id)
 void UTIL_Broadcast( signed_message *mess ) 
 {
   sys_scatter scat;
+  int32u i;
+  int ret;
+#ifdef SET_USE_SPINES
+  int16u prio;
+  int32u length;
+  struct sockaddr_in dest_addr;
+  sp_time t = {SPINES_CONNECT_SEC, SPINES_CONNECT_USEC};
+#endif
 
   /* Broadcast a signed message to all servers in the site. */
   memset(&scat, 0, sizeof(scat));
@@ -646,15 +701,14 @@ void UTIL_Broadcast( signed_message *mess )
   
   /* All messages might have some digest bytes hanging on */
   scat.elements[0].len += (MT_Digests_(mess->mt_num) * DIGEST_SIZE);
-  if (scat.elements[0].len > PRIME_MAX_PACKET_SIZE) {
-    Alarm(PRINT, "size of packet %d\n", scat.elements[0].len); 
-  }
+  
   assert(scat.elements[0].len <= PRIME_MAX_PACKET_SIZE);
 
   /* Cases:
    * 1. Using true multicast: send to appropriate multicast group 
    * 2. Not using true mcast: Send to each server individually */
 
+#ifndef SET_USE_SPINES
   if(USE_IP_MULTICAST)
     UTIL_Send_IP_Multicast(&scat);
   else {
@@ -664,6 +718,81 @@ void UTIL_Broadcast( signed_message *mess )
 	UTIL_Send_To_Server(mess, i);
     }
   }
+#else
+  /* NEW - added for priority sending for TIMELY messages */
+  /*
+  if(UTIL_Get_Timeliness(mess->type) == TIMELY_TRAFFIC_CLASS) {
+      dest_addr.sin_family = AF_INET;
+      dest_addr.sin_port   = htons(NET.spines_mcast_prio_port);
+      dest_addr.sin_addr.s_addr = htonl(NET.spines_mcast_prio_addr);
+
+      length = (mess->len + sizeof(signed_message) + 
+            (MT_Digests_(mess->mt_num) * DIGEST_SIZE));
+        
+      ret = spines_sendto(NET.Spines_Prio_Channel, mess, length, 0, 
+                (struct sockaddr *)&dest_addr, 
+                sizeof(struct sockaddr));
+        
+      if(ret != length) {
+          Alarm(PRINT, "spines_sendto returned length %d, expected %d\n",
+            ret, length);
+          exit(0);
+      }
+  }
+  else { */
+
+    if (NET.Spines_Channel == -1)
+        return;
+
+    prio = UTIL_Get_Priority(mess->type); 
+    assert(prio != 0);
+
+    if (spines_setsockopt(NET.Spines_Channel, 0, SPINES_SET_PRIORITY, (void *)&prio, sizeof(int16u)) < 0) {
+        Alarm(PRINT, "UTIL_Send_To_Server: error setting priority via setsockopt\n");
+        E_detach_fd(NET.Spines_Channel, READ_FD);
+        spines_close(NET.Spines_Channel);
+        NET.Spines_Channel = -1; 
+        if (!E_in_queue(Initialize_Spines, 0, NULL))
+          E_queue(Initialize_Spines, 0, NULL, t); 
+        return; 
+    }
+
+    for (i = 1; i <= NET.num_spines_daemons; i++) {
+        dest_addr.sin_family = AF_INET;
+        dest_addr.sin_port   = htons(NET.spines_mcast_port);
+        dest_addr.sin_addr.s_addr = htonl(NET.spines_daemon_address[i]);
+
+        length = (mess->len + sizeof(signed_message) + 
+            (MT_Digests_(mess->mt_num) * DIGEST_SIZE));
+
+        if (DATA.VIEW.view_change_done == 0 &&
+            NET.spines_daemon_address[i] != 
+            UTIL_Get_Server_Spines_Address(VAR.My_Server_ID)) 
+        {
+            DATA.VIEW.vc_stats_send_count[mess->type]++;
+            if (DATA.VIEW.vc_stats_send_count[mess->type] == 1)
+                DATA.VIEW.vc_stats_send_size[mess->type] = length;
+            DATA.VIEW.vc_stats_sent_bytes += length;
+        }
+
+        //printf("  broadcasting type %s\n", UTIL_Type_To_String(mess->type));
+    
+        ret = spines_sendto(NET.Spines_Channel, mess, length, 0, 
+                (struct sockaddr *)&dest_addr, 
+                sizeof(struct sockaddr));
+    
+        if(ret != length) {
+            Alarm(PRINT, "spines_sendto returned length %d, expected %d\n", ret, length);
+            E_detach_fd(NET.Spines_Channel, READ_FD);
+            spines_close(NET.Spines_Channel);
+            NET.Spines_Channel = -1; 
+            if (!E_in_queue(Initialize_Spines, 0, NULL))
+              E_queue(Initialize_Spines, 0, NULL, t); 
+            return; 
+        }
+    }
+  /* } */
+#endif
 }
 
 void UTIL_Send_IP_Multicast(sys_scatter *scat)
@@ -732,7 +861,7 @@ void UTIL_Test_Server_Address_Functions()
   }
 }
 
-po_slot* UTIL_Get_PO_Slot(int32u server_id, int32u seq_num)
+po_slot* UTIL_Get_PO_Slot(int32u server_id, po_seq_pair ps)
 {
   po_slot *slot;
   stdit it;
@@ -740,12 +869,19 @@ po_slot* UTIL_Get_PO_Slot(int32u server_id, int32u seq_num)
 
   h = &DATA.PO.History[server_id];
 
-  stdhash_find(h, &it, &seq_num);
+  stdhash_find(h, &it, &ps);
 
-  Alarm(DEBUG,"GET PO SLOT %d\n",seq_num);
+  Alarm(DEBUG,"GET PO SLOT %d,%d\n", ps.incarnation, ps.seq_num);
 
   /* If there is nothing in the slot, then create a slot. */
   if (stdhash_is_end(h, &it)) {
+
+    /* If we are about to cross the threshold number of allowed
+     * outstanding PO requests, suicide - ordering isn't wokring */
+    /* if (stdhash_size(h) > 10*GC_LAG) {
+        Alarm(EXIT, "UTIL_Get_PO_Slot: PO request history for server %d has "
+                    "reached max size of %d\n", server_id, GC_LAG);
+    } */
 
     /* Allocate memory for a slot. */
     if((slot = (po_slot *) new_ref_cnt(PO_SLOT_OBJ)) == NULL) {
@@ -753,9 +889,10 @@ po_slot* UTIL_Get_PO_Slot(int32u server_id, int32u seq_num)
 	    " Could not allocate memory for slot.\n");
     }
     memset((void*)slot, 0, sizeof(po_slot));
+    slot->seq = ps;
 
     /* insert this slot in the hash */
-    stdhash_insert(h, NULL, &seq_num, &slot);
+    stdhash_insert(h, NULL, &ps, &slot);
   } 
   else
     slot = *((po_slot**) stdhash_it_val(&it));
@@ -763,7 +900,7 @@ po_slot* UTIL_Get_PO_Slot(int32u server_id, int32u seq_num)
   return slot;
 }
 
-po_slot* UTIL_Get_PO_Slot_If_Exists(int32u server_id, int32u seq_num)
+po_slot* UTIL_Get_PO_Slot_If_Exists(int32u server_id, po_seq_pair ps)
 {
   po_slot *slot;
   stdit it;
@@ -771,7 +908,7 @@ po_slot* UTIL_Get_PO_Slot_If_Exists(int32u server_id, int32u seq_num)
   
   h = &DATA.PO.History[server_id];
   
-  stdhash_find(h, &it, &seq_num);
+  stdhash_find(h, &it, &ps);
   
   /* If there is nothing in the slot, then do not create a slot. */
   if (stdhash_is_end( h, &it))
@@ -802,7 +939,11 @@ ord_slot *UTIL_Get_ORD_Slot(int32u seq_num)
 
     /* insert this slot in the hash */
     memset( (void*)slot, 0, sizeof(ord_slot) );
+
     slot->seq_num = seq_num; 
+    slot->type = SLOT_COMMIT;   /* default value */
+    stddll_construct(&slot->po_slot_list, sizeof(po_id));
+
     stdhash_insert(h, NULL, &seq_num, &slot);
   } 
   else
@@ -862,7 +1003,7 @@ void UTIL_Mark_ORD_Slot_As_Pending(int32u gseq, ord_slot *slot)
   }
 }
 
-recon_slot *UTIL_Get_Recon_Slot(int32u originator, int32u seq_num)
+recon_slot *UTIL_Get_Recon_Slot(int32u originator, po_seq_pair ps)
 { 
   recon_slot *slot;
   stdit it;
@@ -870,9 +1011,9 @@ recon_slot *UTIL_Get_Recon_Slot(int32u originator, int32u seq_num)
 
   h = &DATA.PO.Recon_History[originator];
 
-  stdhash_find(h, &it, &seq_num);
+  stdhash_find(h, &it, &ps);
 
-  Alarm(DEBUG,"GET RECON SLOT %d %d\n", originator, seq_num);
+  Alarm(DEBUG,"GET RECON SLOT %d %d %d\n", originator, ps.incarnation, ps.seq_num);
 
   /* If there is nothing in the slot, then create a slot. */
   if (stdhash_is_end(h, &it)) {
@@ -884,7 +1025,7 @@ recon_slot *UTIL_Get_Recon_Slot(int32u originator, int32u seq_num)
     memset((void*)slot, 0, sizeof(*slot));
 
     /* insert this slot in the hash */
-    stdhash_insert(h, NULL, &seq_num, &slot);
+    stdhash_insert(h, NULL, &ps, &slot);
   } 
   else
     slot = *((recon_slot**) stdhash_it_val(&it));
@@ -893,7 +1034,7 @@ recon_slot *UTIL_Get_Recon_Slot(int32u originator, int32u seq_num)
 }
 
 recon_slot *UTIL_Get_Recon_Slot_If_Exists(int32u originator, 
-					  int32u seq_num)
+					  po_seq_pair ps)
 { 
   recon_slot *slot;
   stdit it;
@@ -901,7 +1042,7 @@ recon_slot *UTIL_Get_Recon_Slot_If_Exists(int32u originator,
 
   h = &DATA.PO.Recon_History[originator];
 
-  stdhash_find(h, &it, &seq_num);
+  stdhash_find(h, &it, &ps);
 
   /* If there is nothing in the slot, then create a slot. */
   if (stdhash_is_end(h, &it))
@@ -911,6 +1052,60 @@ recon_slot *UTIL_Get_Recon_Slot_If_Exists(int32u originator,
   
   return slot;
 }
+
+rb_slot* UTIL_Get_RB_Slot(int32u server_id, int32u seq_num)
+{
+  rb_slot *slot;
+  stdit it;
+  stdhash *h;
+
+  h = &DATA.RB.instances[server_id];
+
+  stdhash_find(h, &it, &seq_num);
+
+  Alarm(DEBUG,"GET RB SLOT %d\n",seq_num);
+
+  /* If there is nothing in the slot, then create a slot. */
+  if (stdhash_is_end(h, &it)) {
+
+    /* Allocate memory for a slot. */
+    if((slot = (rb_slot *) new_ref_cnt(RB_SLOT_OBJ)) == NULL) {
+      Alarm(EXIT,"UTIL_Get_RB_Slot:"
+	    " Could not allocate memory for slot.\n");
+    }
+    memset((void*)slot, 0, sizeof(rb_slot));
+    slot->seq_num = seq_num;
+    slot->state = INIT;
+
+    /* insert this slot in the hash */
+    stdhash_insert(h, NULL, &seq_num, &slot);
+  } 
+  else
+    slot = *((rb_slot**) stdhash_it_val(&it));
+
+  return slot;
+}
+
+rb_slot* UTIL_Get_RB_Slot_If_Exists(int32u server_id, int32u seq_num)
+{
+  rb_slot *slot;
+  stdit it;
+  stdhash *h;
+  
+  h = &DATA.RB.instances[server_id];
+  
+  stdhash_find(h, &it, &seq_num);
+  
+  /* If there is nothing in the slot, then do not create a slot. */
+  if (stdhash_is_end( h, &it))
+    /* There is no slot. */
+    slot = NULL;
+  else
+    slot = *((rb_slot**) stdhash_it_val(&it));
+  
+  return slot;
+}
+
 
 int32u UTIL_Leader() 
 {
@@ -975,6 +1170,23 @@ int32u UTIL_Bitmap_Num_Bits_Set(int32u *bm)
   return ret;
 }
 
+int32u UTIL_Bitmap_Is_Superset(int32u *bm_old, int32u *bm_new)
+{
+    int32u tmp1, tmp2;
+
+    /* first, grab the differences (if any) between old and new */
+    tmp1 = *bm_old ^ *bm_new;
+
+    /* then, see if any thing from old is in the difference */
+    tmp2 = *bm_old & tmp1;
+
+    /* tmp2 is 0 if there is nothing from old in differences,
+     *  meaning that the new is a superset of old */
+    if (tmp2 == 0)
+        return 1;
+
+    return 0;
+}
 
 erasure_node *UTIL_New_Erasure_Node(int32u dest_bits, int32u type, 
 				    int32u part_len, int32u mess_len)
@@ -1003,14 +1215,22 @@ erasure_part_obj *UTIL_New_Erasure_Part_Obj()
   return p;
 }
 
-void UTIL_Respond_To_Client(int32u machine_id, int32u time_stamp)
+void UTIL_Respond_To_Client(int32u machine_id, int32u incarnation, 
+                            int32u seq_num, int32u ord_num,
+                            int32u event_idx, int32u event_tot, 
+                            byte content[UPDATE_SIZE])
 {
   signed_message *mess;
   
-  mess = ORDER_Construct_Client_Response(machine_id, time_stamp);
+  mess = ORDER_Construct_Client_Response(machine_id, incarnation, seq_num, 
+                                        ord_num, event_idx, event_tot, content);
 
   /* Treated specially, no need to set dest_bits or timeliness */
-  SIG_Add_To_Pending_Messages(mess, 0, 0);
+  /* For Benchmarking Prime, we sign client responses. In Prime for SCADA,
+   * with the clients on the same machines as the Prime replicas, we don't need
+   * to sign the client responses */
+  /* SIG_Add_To_Pending_Messages(mess, 0, 0); */
+  UTIL_Write_Client_Response(mess);
   dec_ref_cnt(mess);
 }
 
@@ -1027,22 +1247,38 @@ void UTIL_Write_Client_Response(signed_message *mess)
   Alarm(DEBUG, "Getting ready to write %d bytes to client %d seq %d\n", 
 	size, machine_id, response->seq_num);
 
-  if(NET.client_sd[machine_id] == 0) {
-    Alarm(DEBUG, "Unable to write reply to client %d, no open connection.\n",
+  /* if(NET.client_sd[machine_id] == 0) {
+    Alarm(PRINT, "Unable to write reply to client %d, no open connection.\n",
 	  machine_id);
     return;
   }
-  
   ret = TCP_Write(NET.client_sd[machine_id], mess, 
-		  UTIL_Message_Size(mess));
+		  UTIL_Message_Size(mess)); */
+  
+  if (NET.to_client_sd == 0) {
+    Alarm(DEBUG, "Unable to write reply to client, no open connection.\n");
+    return;
+  }
+
+#if USE_IPC_CLIENT
+  ret = IPC_Send(NET.to_client_sd, mess, size, NET.client_addr.sun_path);
+#else
+  ret = NET_Write(NET.to_client_sd, mess, size);
+#endif
 
   if(ret <= 0) {
-    Alarm(PRINT, "Respond to Client failed, ret = %d\n", ret);
-    Alarm(PRINT, "Closing and cleaning up connection to client %d\n", 
+    Alarm(DEBUG, "Respond to Client failed, ret = %d\n", ret);
+    Alarm(DEBUG, "Closing and cleaning up connection to client %d\n", 
 	  machine_id);
-    close(NET.client_sd[machine_id]);
+#if !USE_IPC_CLIENT
+    close(NET.from_client_sd);
+    E_detach_fd(NET.from_client_sd, READ_FD);
+    NET.from_client_sd = 0;
+    NET.to_client_sd = 0;
+#endif
+    /* close(NET.client_sd[machine_id]);
     E_detach_fd(NET.client_sd[machine_id], READ_FD);
-    NET.client_sd[machine_id] = 0;
+    NET.client_sd[machine_id] = 0; */
     /*ORDER_Cleanup();*/
     /*exit(0);*/
   }
@@ -1123,15 +1359,15 @@ void UTIL_Load_Spines_Addresses()
   FILE *f;
   char fileName[50];
   char dir[100] = ".";
-  int32u num_assigned;
-  int32u server;
+  int32u num_assigned, unique_spines;
+  int32u server, i;
   int32 ip1,ip2,ip3,ip4;
   
   /* Open an address.config file and read in the addresses of all
    * servers in all sites. Note: we are using the same addresses as
    * those in the main address.config file. If different addresses are
    * necessary, two different files can be used. */
-  sprintf(fileName,"%s/address.config",dir);
+  sprintf(fileName,"%s/spines_address.config",dir);
 
   if((f = fopen(fileName, "r")) == NULL)
     Alarm(EXIT, "ERROR: Could not open the spines address file: %s\n", 
@@ -1147,20 +1383,37 @@ void UTIL_Load_Spines_Addresses()
 
   for(server = 1; server <= NUM_SERVERS; server++) {
     NET.server_address_spines[server] = 0;
-  
-    num_assigned = 5;
-      
-      while(num_assigned == 5) {
-	num_assigned = fscanf(f,"%d %d.%d.%d.%d", &server,
-			      &ip1,&ip2,&ip3,&ip4);
-	if(num_assigned == 5) {
-	  Alarm(DEBUG,"%d %d %d %d %d\n", ip1, ip2, ip3, ip4, num_assigned);
-
-	  /* Store the address */
-	  NET.server_address_spines[server] = 
-	    ( (ip1 << 24 ) | (ip2 << 16) | (ip3 << 8) | ip4 );
-	}
-      }
+    NET.spines_daemon_address[server] = 0;
   }
+  NET.num_spines_daemons = 0;
+  
+  num_assigned = 5;
+  while(num_assigned == 5) {
+    num_assigned = fscanf(f,"%d %d.%d.%d.%d", &server,
+                          &ip1,&ip2,&ip3,&ip4);
+    if(num_assigned == 5) {
+      Alarm(DEBUG,"%d %d %d %d %d\n", ip1, ip2, ip3, ip4, num_assigned);
+      if (server <= NUM_SERVERS && server > 0) {
+        /* Store the address */
+        NET.server_address_spines[server] = 
+          ( (ip1 << 24 ) | (ip2 << 16) | (ip3 << 8) | ip4 );
+        unique_spines = 1;
+        for (i = 1; i <= NET.num_spines_daemons; i++) {
+          if (NET.server_address_spines[server] == NET.spines_daemon_address[i]) {
+            unique_spines = 0;
+            break;
+          }
+        }
+        if (unique_spines == 1) {
+          NET.num_spines_daemons++;
+          NET.spines_daemon_address[NET.num_spines_daemons] = NET.server_address_spines[server];
+        }
+      } else {
+        Alarm(PRINT, "WARNING: Spines config includes server %d outside valid range (1 - %d)...ignoring\n", server, NUM_SERVERS);
+      }
+    }
+  }
+
+  fclose(f);
 }
 #endif

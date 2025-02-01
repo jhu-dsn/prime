@@ -1,18 +1,18 @@
 /*
  * Prime.
- *
+ *     
  * The contents of this file are subject to the Prime Open-Source
  * License, Version 1.0 (the ``License''); you may not use
  * this file except in compliance with the License.  You may obtain a
  * copy of the License at:
  *
- * http://www.dsn.jhu.edu/byzrep/prime/LICENSE.txt
+ * http://www.dsn.jhu.edu/prime/LICENSE.txt
  *
  * or in the file ``LICENSE.txt'' found in this distribution.
  *
- * Software distributed under the License is distributed on an AS IS basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
+ * Software distributed under the License is distributed on an AS IS basis, 
+ * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License 
+ * for the specific language governing rights and limitations under the 
  * License.
  *
  * Creators:
@@ -20,18 +20,20 @@
  *   Jonathan Kirsch      jak@cs.jhu.edu
  *   John Lane            johnlane@cs.jhu.edu
  *   Marco Platania       platania@cs.jhu.edu
+ *   Amy Babay            babay@cs.jhu.edu
+ *   Thomas Tantillo      tantillo@cs.jhu.edu
  *
  * Major Contributors:
  *   Brian Coan           Design of the Prime algorithm
  *   Jeff Seibert         View Change protocol
- *
- * Copyright (c) 2008 - 2014
+ *      
+ * Copyright (c) 2008 - 2017
  * The Johns Hopkins University.
  * All rights reserved.
- *
- * Partial funding for Prime research was provided by the Defense Advanced
- * Research Projects Agency (DARPA) and The National Security Agency (NSA).
- * Prime is not necessarily endorsed by DARPA or the NSA.
+ * 
+ * Partial funding for Prime research was provided by the Defense Advanced 
+ * Research Projects Agency (DARPA) and the National Science Foundation (NSF).
+ * Prime is not necessarily endorsed by DARPA or the NSF.  
  *
  */
 
@@ -64,9 +66,13 @@
 #define NUMBER_OF_SERVERS        NUM_SERVERS
 #define NUMBER_OF_CLIENTS        NUM_CLIENTS
 
+/* This flag is used to remove crypto for testing -- this feature eliminates
+ * security and Byzantine fault tolerance. */
+#define REMOVE_CRYPTO 0 
 
 /* Global variables */
 RSA *private_rsa; /* My Private Key */
+RSA *private_client_rsa; /* My Private Client Key (If im also a server) */
 RSA *public_rsa_by_server[NUMBER_OF_SERVERS + 1];
 RSA *public_rsa_by_client[NUMBER_OF_CLIENTS + 1];
 const EVP_MD *message_digest;
@@ -224,6 +230,12 @@ void OPENSSL_RSA_Generate_Keys() {
   /* Read my private key. */
   private_rsa = RSA_new();
   Read_RSA( rt, my_number, private_rsa );
+
+  if (type == RSA_SERVER ) {
+    rt = RSA_TYPE_CLIENT_PRIVATE;
+    private_client_rsa = RSA_new();
+    Read_RSA( rt, my_number, private_client_rsa );
+  }
 }
 
 void OPENSSL_RSA_Init() 
@@ -309,7 +321,7 @@ void OPENSSL_RSA_Make_Signature( const byte *digest_value, byte *signature )
    * assumed to be 20 bytes. */
 
 #if REMOVE_CRYPTO
-  //UTIL_Busy_Wait(0.000005);
+  UTIL_Busy_Wait(0.000005);
   return;
 #endif
   
@@ -342,12 +354,13 @@ int32u OPENSSL_RSA_Verify_Signature( const byte *digest_value,
 
     /* Verify a signature for the specified digest value. The digest value is
      * assumed to be 20 bytes. */
+    /* AB: Can we please just change this to use DIGEST_SIZE? */
    
     int32 ret;
     RSA *rsa; 
 
 #if REMOVE_CRYPTO 
-    //UTIL_Busy_Wait(0.000005);
+    UTIL_Busy_Wait(0.000005);
     return 1;
 #endif
     
@@ -392,7 +405,7 @@ void OPENSSL_RSA_Sign( const unsigned char *message, size_t message_length,
   unsigned char md_value[EVP_MAX_MD_SIZE];
 
 #if REMOVE_CRYPTO
-    //UTIL_Busy_Wait(0.000005);
+    UTIL_Busy_Wait(0.000005);
     return;
 #endif
 
@@ -421,7 +434,7 @@ int OPENSSL_RSA_Verify( const unsigned char *message, size_t message_length,
     unsigned char md_value[EVP_MAX_MD_SIZE];
 
 #if REMOVE_CRYPTO
-    //UTIL_Busy_Wait(0.000005);
+    UTIL_Busy_Wait(0.000005);
     return 1;
 #endif    
 

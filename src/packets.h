@@ -1,18 +1,18 @@
 /*
  * Prime.
- *
+ *     
  * The contents of this file are subject to the Prime Open-Source
  * License, Version 1.0 (the ``License''); you may not use
  * this file except in compliance with the License.  You may obtain a
  * copy of the License at:
  *
- * http://www.dsn.jhu.edu/byzrep/prime/LICENSE.txt
+ * http://www.dsn.jhu.edu/prime/LICENSE.txt
  *
  * or in the file ``LICENSE.txt'' found in this distribution.
  *
- * Software distributed under the License is distributed on an AS IS basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
+ * Software distributed under the License is distributed on an AS IS basis, 
+ * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License 
+ * for the specific language governing rights and limitations under the 
  * License.
  *
  * Creators:
@@ -20,18 +20,20 @@
  *   Jonathan Kirsch      jak@cs.jhu.edu
  *   John Lane            johnlane@cs.jhu.edu
  *   Marco Platania       platania@cs.jhu.edu
+ *   Amy Babay            babay@cs.jhu.edu
+ *   Thomas Tantillo      tantillo@cs.jhu.edu
  *
  * Major Contributors:
  *   Brian Coan           Design of the Prime algorithm
  *   Jeff Seibert         View Change protocol
- *
- * Copyright (c) 2008 - 2014
+ *      
+ * Copyright (c) 2008 - 2017
  * The Johns Hopkins University.
  * All rights reserved.
- *
- * Partial funding for Prime research was provided by the Defense Advanced
- * Research Projects Agency (DARPA) and The National Security Agency (NSA).
- * Prime is not necessarily endorsed by DARPA or the NSA.
+ * 
+ * Partial funding for Prime research was provided by the Defense Advanced 
+ * Research Projects Agency (DARPA) and the National Science Foundation (NSF).
+ * Prime is not necessarily endorsed by DARPA or the NSF.  
  *
  */
 
@@ -42,26 +44,32 @@
 #include "spu_events.h"
 #include "def.h"
 #include "openssl_rsa.h"
-#include "tc_wrapper.h"
 #include "util_dll.h"
+//#include "data_structs.h"
 
-//JCS: PO_ARU is PO_SUMMARY and PROOF_MATRIX is SUMMARY_MATRIX in Kirsch's thesis
+/* NOTE: PO_ARU is PO_SUMMARY and PROOF_MATRIX is SUMMARY_MATRIX in Kirsch's thesis */
 
 enum packet_types {DUMMY, 
-		   PO_REQUEST,  PO_ACK,  PO_ARU, PROOF_MATRIX, 
+		   PO_REQUEST,  PO_ACK,  PO_ARU, PROOF_MATRIX,
 		   PRE_PREPARE, PREPARE, COMMIT, RECON,
-		   UPDATE, CLIENT_RESPONSE, RTT_PING, RTT_PONG, RTT_MEASURE,
-		   TAT_MEASURE, TAT_UB, NEW_LEADER, NEW_LEADER_PROOF,
-		   RB_INIT, RB_ECHO, RB_READY,
-		   REPORT, PC_SET, VC_LIST, VC_PARTIAL_SIG, VC_PROOF,
-		   REPLAY, REPLAY_PREPARE, REPLAY_COMMIT, 
-		   ORD_CERT, ORD_CERT_REPLY, PO_CERT, PO_CERT_REPLY,
-                   DB_STATE_DIGEST_REQUEST, DB_STATE_DIGEST_REPLY,
-                   DB_STATE_VALIDATION_REQUEST, DB_STATE_VALIDATION_REPLY, 
-                   DB_STATE_TRANSFER_REQUEST, DB_STATE_TRANSFER_REPLY, 
-                   CATCH_UP, CATCH_UP_REPLY, LAST_MESSAGE_TYPE};
+           TAT_MEASURE, RTT_PING, RTT_PONG, RTT_MEASURE, TAT_UB,
+           NEW_LEADER, NEW_LEADER_PROOF,
+           RB_INIT, RB_ECHO, RB_READY,
+           REPORT, PC_SET, VC_LIST, VC_PARTIAL_SIG, VC_PROOF,
+           REPLAY, REPLAY_PREPARE, REPLAY_COMMIT,
+           CATCHUP_REQUEST, ORD_CERT, PO_CERT, //CATCHUP_REPLY,
+		   UPDATE, CLIENT_RESPONSE, 
+           MAX_MESS_TYPE};
 
-//typedef byte packet_body[PRIME_MAX_PACKET_SIZE];
+/* Defines to help with SCADA application */
+#define CLIENT_NO_OP 101
+#define CLIENT_STATE_TRANSFER 102
+#define NEW_INCARNATION 103
+
+/* Forward declaration */
+struct dummy_ord_slot;
+
+typedef byte packet_body[PRIME_MAX_PACKET_SIZE];
 
 typedef struct dummy_signed_message {
   byte sig[SIGNATURE_SIZE];
@@ -73,7 +81,9 @@ typedef struct dummy_signed_message {
   
   int32u len;        /* length of the content */
   int32u type;       /* type of the message */
- 
+  
+  /* int32u seq_num; */
+
   /* Content of message follows */
 } signed_message;
 
@@ -86,7 +96,8 @@ typedef struct dummy_update_message {
   int32u server_id;
   int32  address;
   int16  port;
-  int32u time_stamp;
+  int32u incarnation;
+  int32u seq_num;
   /* the update content follows */
 } update_message;
 
@@ -96,8 +107,15 @@ typedef struct dummy_signed_update_message {
   byte update_contents[UPDATE_SIZE];
 } signed_update_message;
 
+/* Struct used to handle (incarnation, seq) tuples that
+ *  are used everywhere for the preordering information */
+typedef struct dummy_po_seq_pair {
+    int32u incarnation;
+    int32u seq_num;
+} po_seq_pair;
+
 typedef struct dummy_po_request {
-  int32u seq_num;          
+  po_seq_pair seq;        
   int32u num_events;
   /* Event(s) follows */
 } po_request_message;
@@ -105,7 +123,7 @@ typedef struct dummy_po_request {
 /* Structure for batching acks */
 typedef struct dummy_po_ack_part {
   int32u originator;                /* originating entity (server) */
-  int32u seq_num;                   /* seq number                  */
+  po_seq_pair seq;
   byte digest[DIGEST_SIZE];         /* a digest of the update      */
 } po_ack_part;
 
@@ -116,9 +134,10 @@ typedef struct dummy_po_ack_message {
 
 /* Messages for Pre-Ordering */
 typedef struct dummy_po_aru_message {
+  int32u incarnation;
   int32u num;
   /* Cumulative ack for each server */
-  int32u ack_for_server[NUM_SERVERS]; 
+  po_seq_pair ack_for_server[NUM_SERVERS]; 
 } po_aru_message;
 
 /* a struct containing pre-order proof messages */
@@ -130,6 +149,10 @@ typedef struct dummy_po_cum_ack_signed_message {
 typedef struct dummy_proof_matrix_message {
   int32u num_acks_in_this_message;
 
+  /* timing tests */
+  int32u sec;
+  int32u usec;
+
   /* The content follows: some number of po_aru_signed_messages */
 } proof_matrix_message;
 
@@ -139,6 +162,10 @@ typedef struct dummy_pre_prepare_message {
   
   /* View number */
   int32u view;
+
+  /* timing tests */
+  int32u sec;
+  int32u usec;
 
   int16u part_num;
   int16u total_parts;
@@ -167,15 +194,20 @@ typedef struct dummy_complete_pre_prepare_message {
   po_aru_signed_message cum_acks[NUM_SERVERS];
 } complete_pre_prepare_message;
 
-typedef struct dummy_complete_prepare_message {
-  signed_message header;
-  prepare_message body;
-} complete_prepare_message;
-
 typedef struct dummy_client_response_message {
   int32u machine_id;
+  int32u incarnation;
   int32u seq_num;
+  int32u ord_num;
+  int32u event_idx;
+  int32u event_tot;
+  double PO_time;
 } client_response_message;
+
+typedef struct dummy_tat_measure {
+  int32u view;
+  double max_tat;
+} tat_measure_message;
 
 typedef struct dummy_rtt_ping {
   int32u ping_seq_num;
@@ -183,83 +215,119 @@ typedef struct dummy_rtt_ping {
 } rtt_ping_message;
 
 typedef struct dummy_rtt_pong {
+  int32u dest;
   int32u ping_seq_num;
   int32u view;
-  int32u recipient;
 } rtt_pong_message;
 
 typedef struct dummy_rtt_measure {
+  int32u dest;
   int32u view;
   double rtt;
-  int32u recipient;
 } rtt_measure_message;
 
-typedef struct dummy_tat_upper_bound {
+typedef struct dummy_tat_ub {
   int32u view;
   double alpha;
-} tat_upper_bound_message;
-
-typedef struct dummy_tat_measure {
-  int32u view;
-  double max_tat;
-} tat_measure_message;
+} tat_ub_message;
 
 typedef struct dummy_new_leader {
   int32u new_view;
 } new_leader_message;
 
-
 typedef struct dummy_new_leader_proof {
   int32u new_view;
-  //what follows are: 2*NUM_FAULTS+1 signed new_leader_messages 
+  /* what follows are: 2*F+K+1 signed new_leader_messages for
+      the new proposed view */
 } new_leader_proof_message;
 
+/* RB_INIT, RB_ECHO, RB_READY are just a TYPE + signed_message pointer */
 
 typedef struct dummy_reliable_broadcast_tag {
   int32u machine_id;
-  int32u seq_num;
   int32u view;
+  int32u seq_num;
 } reliable_broadcast_tag;
 
 typedef struct dummy_report {
-  reliable_broadcast_tag rb_tag; //must be <v, 0> to be accepted
+  reliable_broadcast_tag rb_tag;
   int32u execARU;
-  int32u pc_set_size; //numSeq in thesis
+  int32u pc_set_size; /* numSeq in Kirsch thesis */
 } report_message;
 
 typedef struct dummy_pc_set {
   reliable_broadcast_tag rb_tag;
-  //what follows is 1 pre-prepare and 2f prepares
+  /* prepare certificate follows: 1 pre-prepare and 2f+k prepares */
 } pc_set_message;
 
 typedef struct dummy_vc_list {
   int32u view;
-  int32u complete_state;
+  int32u list;
 } vc_list_message;
 
 typedef struct dummy_vc_partial_sig {
   int32u view;
-  int32u ids;
+  int32u list;
   int32u startSeq;
-  byte thresh_sig[SIGNATURE_SIZE];
+  byte partial_sig[SIGNATURE_SIZE];
 } vc_partial_sig_message;
 
 typedef struct dummy_vc_proof {
   int32u view;
-  int32u ids;
+  int32u list;
   int32u startSeq;
   byte thresh_sig[SIGNATURE_SIZE];
 } vc_proof_message;
 
 typedef struct dummy_replay {
-  vc_proof_message proof;
+  int32u view;
+  int32u list;
+  int32u startSeq;
+  byte thresh_sig[SIGNATURE_SIZE];
 } replay_message;
 
 typedef struct dummy_replay_prepare {
+  int32u view;
+  byte digest[DIGEST_SIZE];
 } replay_prepare_message;
 
 typedef struct dummy_replay_commit {
+  int32u view;
+  byte digest[DIGEST_SIZE];
 } replay_commit_message;
+
+typedef struct dummy_catchup_request {
+//  int32u view;
+  int32u aru;
+  /* possibly include PO.aru vector so that the
+   * receiver can know if they should EXCLUDE any of the
+   * PO_Requests that became eligible for exection from
+   * this ordinal. In the worst case, they send all
+   * PO requests associated with this ord_slot. DO_RECON
+   * could then be called comparing this vector with the
+   * list of PO Requests */
+} catchup_request_message;
+
+//typedef struct dummy_catchup_reply {
+//  int32u view;
+//  int32u seq_num;
+//  int32u type;
+  /* ord certificate follows: always 1 pre-prepare, If commit_cert, also 2f+k+1 commits */
+//} catchup_reply_message;
+
+typedef struct dummy_ord_certificate_message {
+  int32u view;
+  int32u seq_num;
+  int32u type;
+  int32u flag;   /* indicates whether this is part of periodic sending or specifically catchup */
+  /* ord certificate follows: always 1 pre-prepare, If commit_cert, also 2f+k+1 commits */
+} ord_certificate_message;
+
+typedef struct dummy_po_certificate_message {
+  int32u server;
+  int32u seq_num;
+  // TODO
+} po_certificate_message;
 
 typedef struct dummy_erasure_part {
 
@@ -291,116 +359,43 @@ typedef struct dummy_commit_certificate {
 } commit_certificate_struct;
 
 signed_message* PRE_ORDER_Construct_PO_Request  (void);
-signed_message* PRE_ORDER_Construct_PO_Ack      (int32u *more_to_ack);
+signed_message* PRE_ORDER_Construct_PO_Ack      (int32u *more_to_ack, int32u send_all_nonexec);
 signed_message* PRE_ORDER_Construct_PO_ARU      (void);
 void PRE_ORDER_Construct_Proof_Matrix(signed_message **mset, 
 				      int32u *num_parts);
+signed_message *PRE_ORDER_Construct_Update(int32u type);
 
 void ORDER_Construct_Pre_Prepare(signed_message **mset, int32u *num_parts);
 signed_message* ORDER_Construct_Prepare(complete_pre_prepare_message *pp);
 signed_message* ORDER_Construct_Commit (complete_pre_prepare_message *pp);
-signed_message* ORDER_Construct_Client_Response(int32u client_id, 
-						int32u seq_num);
+signed_message* ORDER_Construct_Client_Response(int32u client_id, int32u incarnation, 
+                    int32u seq_num, int32u ord_num, int32u event_idx, 
+                    int32u event_tot, byte content[UPDATE_SIZE]);
 
+signed_message* SUSPECT_Construct_TAT_Measure(double max_tat);
 signed_message* SUSPECT_Construct_RTT_Ping(void);
 signed_message* SUSPECT_Construct_RTT_Pong(int32u server_id, int32u seq_num);
 signed_message* SUSPECT_Construct_RTT_Measure(int32u server_id, double rtt);
-signed_message* SUSPECT_Construct_TAT_Measure(double max_tat);
 signed_message* SUSPECT_Construct_TAT_UB(double alpha);
-signed_message* SUSPECT_Construct_New_Leader(void);
-signed_message* SUSPECT_Construct_New_Leader_Proof(void);
 
-signed_message* RELIABLE_Construct_RB_Init(signed_message *mess);
-signed_message* RELIABLE_Construct_RB_Echo(signed_message *mess);
-signed_message* RELIABLE_Construct_RB_Ready(signed_message *mess);
+signed_message* SUSPECT_Construct_New_Leader();
+signed_message* SUSPECT_Construct_New_Leader_Proof();
 
-signed_message* VIEW_Construct_Report(void);
-signed_message* VIEW_Construct_PC_Set(char *cert, int size);
-signed_message* VIEW_Construct_VC_List(void);
-signed_message* VIEW_Construct_VC_Partial_Sig(int32u ids);
-signed_message* VIEW_Construct_VC_Proof(int32u view, int32u ids, int32u startSeq, byte *sig);
-signed_message* VIEW_Construct_Replay(vc_proof_message *proof);
-signed_message* VIEW_Construct_Replay_Prepare(void);
-signed_message* VIEW_Construct_Replay_Commit(void);
+signed_message* RB_Construct_Message(int32u type, signed_message *mess);
+
+signed_message* VIEW_Construct_Report();
+signed_message* VIEW_Construct_PC_Set();
+signed_message* VIEW_Construct_VC_List();
+signed_message* VIEW_Construct_VC_Partial_Sig(int32u list);
+signed_message* VIEW_Construct_VC_Proof(int32u list, int32u startSeq, signed_message **m_arr);
+signed_message* VIEW_Construct_Replay(vc_proof_message *vc_proof);
+signed_message* VIEW_Construct_Replay_Prepare();
+signed_message* VIEW_Construct_Replay_Commit();
+
+signed_message* PR_Construct_Catchup_Request(void);
+signed_message* PR_Construct_ORD_Certificate(struct dummy_ord_slot *slot);
+signed_message* PR_Construct_PO_Certificate(void);
 
 signed_message *RECON_Construct_Recon_Erasure_Message(dll_struct *list,
 							int32u *more_to_encode);
-
-/* Functions and data structures used for recovery */
-typedef struct dummy_ord_cert_message {
-  int32u seq_num;
-  int32u view;
-} ord_cert_message;
-
-typedef struct dummy_ord_cert_reply_message {
-  int32u seq_num;
-  int32u view;
-  complete_pre_prepare_message pre_prepare;
-} ord_cert_reply_message;
-
-typedef struct dummy_po_cert_message {
-  int32u server_id;
-  int32u seq_num;
-} po_cert_message;
-
-typedef struct dummy_po_cert_reply_message {
-  int32u server_id;
-  int32u seq_num;
-  int32u ack_count;
-} po_cert_reply_message;
-
-typedef struct dummy_db_state_digest_request_message {
-  int32u checkpoint_id;
-} db_state_digest_request_message;
-
-typedef struct dummy_db_state_digest_reply_message {
-  int32u checkpoint_id;
-  off_t  state_size;
-  byte digest[DIGEST_SIZE];
-} db_state_digest_reply_message;
-
-typedef struct dummy_db_state_validation_request_message {
-  int32u checkpoint_id;
-  int32u data_block;
-} db_state_validation_request_message;
-
-typedef struct dummy_db_state_validation_reply_message {
-  int32u checkpoint_id;
-  int32u data_block;
-  byte digest[DIGEST_SIZE];
-} db_state_validation_reply_message;
-
-typedef struct dummy_db_state_transfer_request_message {
-  int32u checkpoint_id;
-  int32u data_block;
-} db_state_transfer_request_message;
-
-typedef struct dummy_db_state_transfer_reply_message {
-  int32u checkpoint_id;
-  int32u data_block;
-  int32u part;
-  int32u bytes;
-} db_state_transfer_reply_message;
-
-typedef struct dummy_catch_up_message{
-} catch_up_message;
-
-typedef struct dummy_catch_up_reply_message{
-  int32u view;
-  int32u seq_num;
-  int32u aru[NUM_SERVER_SLOTS];
-} catch_up_reply_message;
-
-signed_message *RECOVERY_Construct_Ord_Cert_Message(int32u, int32u);
-signed_message *RECOVERY_Construct_Ord_Cert_Reply_Message(int32u, int32u, char*, int, complete_pre_prepare_message);
-signed_message *RECOVERY_Construct_PO_Cert_Message(int32u, int32u);
-signed_message *RECOVERY_Construct_PO_Cert_Reply_Message(int32u, int32u, char*, int32u, int);
-signed_message *RECOVERY_Construct_DB_State_Digest_Request_Message(int32u);
-signed_message *RECOVERY_Construct_DB_State_Digest_Reply_Message(int32u, byte[], off_t);
-signed_message *RECOVERY_Construct_DB_State_Validation_Request_Message(int32u, int32u);
-signed_message *RECOVERY_Construct_DB_State_Validation_Reply_Message(int32u, int32u, byte[]);
-signed_message *RECOVERY_Construct_DB_State_Transfer_Request_Message(int32u, int32u);
-signed_message *RECOVERY_Construct_DB_State_Transfer_Reply_Message(int32u, int32u, int32u, char*, int32u);
-signed_message *RECOVERY_Construct_Catch_Up_Message();
-signed_message *RECOVERY_Construct_Catch_Up_Reply_Message(int32u, int32u, int32u[]);
 #endif

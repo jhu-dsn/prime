@@ -1,18 +1,18 @@
 /*
  * Prime.
- *
+ *     
  * The contents of this file are subject to the Prime Open-Source
  * License, Version 1.0 (the ``License''); you may not use
  * this file except in compliance with the License.  You may obtain a
  * copy of the License at:
  *
- * http://www.dsn.jhu.edu/byzrep/prime/LICENSE.txt
+ * http://www.dsn.jhu.edu/prime/LICENSE.txt
  *
  * or in the file ``LICENSE.txt'' found in this distribution.
  *
- * Software distributed under the License is distributed on an AS IS basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
+ * Software distributed under the License is distributed on an AS IS basis, 
+ * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License 
+ * for the specific language governing rights and limitations under the 
  * License.
  *
  * Creators:
@@ -20,28 +20,32 @@
  *   Jonathan Kirsch      jak@cs.jhu.edu
  *   John Lane            johnlane@cs.jhu.edu
  *   Marco Platania       platania@cs.jhu.edu
+ *   Amy Babay            babay@cs.jhu.edu
+ *   Thomas Tantillo      tantillo@cs.jhu.edu
  *
  * Major Contributors:
  *   Brian Coan           Design of the Prime algorithm
  *   Jeff Seibert         View Change protocol
- *
- * Copyright (c) 2008 - 2014
+ *      
+ * Copyright (c) 2008 - 2017
  * The Johns Hopkins University.
  * All rights reserved.
- *
- * Partial funding for Prime research was provided by the Defense Advanced
- * Research Projects Agency (DARPA) and The National Security Agency (NSA).
- * Prime is not necessarily endorsed by DARPA or the NSA.
+ * 
+ * Partial funding for Prime research was provided by the Defense Advanced 
+ * Research Projects Agency (DARPA) and the National Science Foundation (NSF).
+ * Prime is not necessarily endorsed by DARPA or the NSF.  
  *
  */
 
 #include <stdlib.h>
 #include <string.h>
-#include "sys/socket.h"
 #include <netdb.h>
 #include <sys/socket.h>
 #include <sys/ioctl.h>
+#include <sys/un.h>
+#include <sys/stat.h>
 #include <unistd.h>
+#include <errno.h>
 #include <netinet/in.h>
 #include <assert.h>
 #include "arch.h"
@@ -55,18 +59,13 @@
 #include "network.h"
 #include "utility.h"
 #include "validate.h"
-#include "apply.h"
-#include "dispatcher.h"
+#include "process.h"
 #include "pre_order.h"
-#include "tcp_wrapper.h"
+#include "net_wrapper.h"
 
 #ifdef SET_USE_SPINES
-#include "../spines/spines_lib.h"
+#include "spines_lib.h"
 #endif
-
-#define UDP_SOURCE     1
-#define SPINES_SOURCE  2
-#define TCP_SOURCE     3
 
 /* Global variables defined elsewhere */
 extern network_variables   NET;
@@ -78,19 +77,18 @@ extern benchmark_struct    BENCH;
 static sys_scatter srv_recv_scat;
 
 /* Local Functions */
+#if !USE_IPC_CLIENT
+void Initialize_Listening_Socket(void);
 void NET_Client_Connection_Acceptor(int sd, int dummy, void *dummyp);
+#endif
 void NET_Throttle_Send             (int dummy, void* dummyp);
 void NET_Send_Message(net_struct *n);
-void Initialize_Listening_Socket(void);
+void Initialize_IPC_Socket(void);
 void Initialize_UDP_Sockets(void);
 
 /* Maximize the send and receive buffers.  Thanks to Nilo Rivera. */
 int max_rcv_buff(int sk);
 int max_snd_buff(int sk);
-
-#ifdef SET_USE_SPINES
-void Initialize_Spines(void);
-#endif
 
 void Init_Network(void) 
 {
@@ -98,10 +96,44 @@ void Init_Network(void)
 #if THROTTLE_OUTGOING_MESSAGES
   sp_time t;
 #endif
+#if USE_IPC_CLIENT
+  struct sockaddr_un conn;
+#endif
 
+  /* Set Application Replica socket to 0 */
+  NET.from_client_sd = 0;
+  NET.to_client_sd = 0;
+
+#if USE_IPC_CLIENT
+  if((NET.from_client_sd = socket(AF_UNIX, SOCK_DGRAM, 0)) < 0) 
+    Alarm(EXIT, "socket error.\n");
+
+  memset(&conn, 0, sizeof(struct sockaddr_un));
+  conn.sun_family = AF_UNIX;
+  sprintf(conn.sun_path, "%s%d", (char *)REPLICA_IPC_PATH, VAR.My_Server_ID);
+
+  if (remove(conn.sun_path) == -1 && errno != ENOENT) {
+      perror("Initialize_IPC_Socket: error removing previous path binding");
+      exit(EXIT_FAILURE);
+  }
+  if ((bind(NET.from_client_sd, (struct sockaddr *)&conn, sizeof(conn))) < 0) {
+    perror("bind");
+    exit(0);
+  }
+  chmod(conn.sun_path, S_IRWXU | S_IRWXG | S_IROTH | S_IXOTH);
+  E_attach_fd(NET.from_client_sd, READ_FD, Net_Srv_Recv, IPC_SOURCE, NULL, MEDIUM_PRIORITY);
+
+  if((NET.to_client_sd = socket(AF_UNIX, SOCK_DGRAM, 0)) < 0) 
+    Alarm(EXIT, "socket error.\n");
+
+  memset(&NET.client_addr, 0, sizeof(struct sockaddr_un));
+  NET.client_addr.sun_family = AF_UNIX;
+  sprintf(NET.client_addr.sun_path, "%s%d", (char *)CLIENT_IPC_PATH, VAR.My_Server_ID);
+#else
   /* Each server listens for incoming TCP connections from clients on
    * port PRIME_TCP_PORT */
   Initialize_Listening_Socket();
+#endif
 
   Initialize_UDP_Sockets();
 
@@ -113,7 +145,7 @@ void Init_Network(void)
     Alarm(EXIT, "Init_Network: Cannot allocate packet object\n");
   
 #ifdef SET_USE_SPINES
-  Initialize_Spines();
+  Initialize_Spines(0, NULL);
 #endif
 
   /* Initialize the rest of the data structure */
@@ -130,6 +162,7 @@ void Init_Network(void)
 #endif
 }
 
+#if !USE_IPC_CLIENT
 void Initialize_Listening_Socket()
 {
   struct sockaddr_in server_addr;
@@ -143,12 +176,14 @@ void Initialize_Listening_Socket()
     perror("setsockopt");
     exit(0);
   }
+
   memset(&server_addr, 0, sizeof(server_addr));
   server_addr.sin_family      = AF_INET;
   server_addr.sin_port        = htons(PRIME_TCP_BASE_PORT+VAR.My_Server_ID);
   server_addr.sin_addr.s_addr = htonl(INADDR_ANY);
-  if((bind(NET.listen_sd, (struct sockaddr *)&server_addr,
-	   sizeof(server_addr))) < 0) {
+
+  if((bind(NET.listen_sd, (struct sockaddr *)&server_addr, 
+        sizeof(server_addr))) < 0) {
     perror("bind");
     exit(0);
   }
@@ -162,6 +197,7 @@ void Initialize_Listening_Socket()
   E_attach_fd(NET.listen_sd, READ_FD, NET_Client_Connection_Acceptor, 
 	      0, NULL, MEDIUM_PRIORITY);
 }
+#endif
 
 void Initialize_UDP_Sockets()
 {
@@ -185,7 +221,6 @@ void Initialize_UDP_Sockets()
   NET.Recon_Channel = DL_init_channel(SEND_CHANNEL | RECV_CHANNEL,
 				      NET.Recon_Port, 0, 0);
 
-#ifndef SET_USE_SPINES
   /* Maximize the size of the buffers on each socket */
   max_rcv_buff(NET.Bounded_Channel);
   max_rcv_buff(NET.Timely_Channel);
@@ -203,7 +238,6 @@ void Initialize_UDP_Sockets()
 
   E_attach_fd(NET.Recon_Channel, READ_FD, Net_Srv_Recv, 
 	      UDP_SOURCE, NULL, MEDIUM_PRIORITY); 
-#endif
 
   if(USE_IP_MULTICAST) {
 
@@ -368,70 +402,210 @@ void NET_Send_Message(net_struct *n)
 }
 
 #ifdef SET_USE_SPINES
-void Initialize_Spines()
+void Initialize_Spines(int dummy, void *dummy_p)
 {
-  channel spines_recv_sk = -1;
+  channel spines_recv_sk;
   struct sockaddr_in spines_addr, my_addr;
-  int ret, priority;
+  struct sockaddr_un spines_uaddr;
+  struct ip_mreq mreq;
+  int ret, priority, i1, i2, i3, i4;
+  long my_ip, spines_ip;
+  char lb;
   int16u protocol;
+  int16u kpaths;
+  spines_nettime exp;
+  sp_time t = {SPINES_CONNECT_SEC, SPINES_CONNECT_USEC};
 
+  Alarm(DEBUG, "%d Init Spines... %d\n", VAR.My_Server_ID, SPINES_PORT);
+  
+  my_ip     = htonl(UTIL_Get_Server_Address(VAR.My_Server_ID));
+  spines_ip = htonl(UTIL_Get_Server_Spines_Address(VAR.My_Server_ID));
+  NET.Spines_Channel = -1;
+
+#if 0
+  /* ========== Connect to spines for Reliable (Bounded) ========= */
+  spines_recv_sk = -1;
   memset(&spines_addr, 0, sizeof(spines_addr));  
   memset(&my_addr, 0, sizeof(my_addr));  
- 
-  spines_addr.sin_family = AF_INET;
-  spines_addr.sin_port   = htons(SPINES_PORT);
-  spines_addr.sin_addr.s_addr = 
-    htonl(UTIL_Get_Server_Spines_Address(VAR.My_Server_ID));
-    
-  Alarm(DEBUG, "%d Init Spines... "IPF"\n", VAR.My_Server_ID, 
-	IP(ntohl(spines_addr.sin_addr.s_addr)));
-  
-  /* Connect to spines */
-  // x | (y << 8)
-  // x = {0,1,2,3,4,5,6,7,8}
-  //   - 0 best effort
-  //   - 1 reliable
-  //   - 8 intrusion tolerant
-  // y = {0,1,2}
-  //   - shortest path routing
-  //   - priority flooding
-  //   - reliable flooding
-  // Intusion-tolerant Spines: x = 8, y = 2
-  // Spines 4.0: x = 1, y = 0 
-  protocol = 8 | (2 << 8);
-  spines_recv_sk = spines_socket(PF_SPINES, SOCK_DGRAM, protocol, 
-				 (struct sockaddr *)&spines_addr);
 
+  protocol = 8 | (2 << 8) | (1 << 12);
+
+#if 0
+  if (my_ip != spines_ip || USE_SPINES_IPC == 0)  /* TCP */
+  {
+      spines_addr.sin_family = AF_INET;
+      spines_addr.sin_port   = htons(SPINES_PORT);
+      spines_addr.sin_addr.s_addr = spines_ip;
+      spines_recv_sk = spines_socket(PF_SPINES, SOCK_DGRAM, protocol, 
+                     (struct sockaddr *)&spines_addr);
+  } else { /* IPC */
+      spines_uaddr.sun_family = AF_UNIX;
+      sprintf(spines_uaddr.sun_path, "%s%d", "/tmp/spines", SPINES_PORT);
+      printf("Spines Unix Socket to %s!\n", spines_uaddr.sun_path);
+      spines_recv_sk = spines_socket(PF_SPINES, SOCK_DGRAM, protocol, 
+                       (struct sockaddr *)&spines_uaddr);
+  }
+#endif
+
+  spines_uaddr.sun_family = AF_UNIX;
+  sprintf(spines_uaddr.sun_path, "%s%d", "/tmp/spines", SPINES_PORT);
+  //printf("Spines Unix Socket to %s!\n", spines_uaddr.sun_path);
+  spines_recv_sk = spines_socket(PF_SPINES, SOCK_DGRAM, protocol, 
+                   (struct sockaddr *)&spines_uaddr);
   if(spines_recv_sk == -1) {
     Alarm(PRINT, "%d Could not connect to Spines daemon.\n", VAR.My_Server_ID );
-    exit(0);
+    goto fail;
   } 
 
+  /* Setting k-paths to k = 1 */
+  kpaths = 1;
+  if (spines_setsockopt(spines_recv_sk, 0, SPINES_DISJOINT_PATHS, (void *)&kpaths, sizeof(int16u)) < 0) {
+    Alarm(PRINT, "spines_setsockopt failed\n");
+    goto fail_close;
+  }
+
   /* Set the buffer size of the socket */
-  Alarm(PRINT, "Spines channel: ");
   max_rcv_buff(spines_recv_sk);
   max_snd_buff(spines_recv_sk);
 
   /* Bind to my unique port */  
-  my_addr.sin_addr.s_addr = htonl(UTIL_Get_Server_Address(VAR.My_Server_ID));
-  my_addr.sin_port        = htons(PRIME_SPINES_SERVER_BASE_PORT + 
-				  VAR.My_Server_ID);
+  my_addr.sin_addr.s_addr = my_ip;
+  my_addr.sin_port        = htons(PRIME_SPINES_SERVER_BASE_PORT + VAR.My_Server_ID);
       
   ret = spines_bind(spines_recv_sk, (struct sockaddr *)&my_addr,
 		    sizeof(struct sockaddr_in));
-  if(ret == -1) {
+  if (ret == -1) {
     Alarm(PRINT, "Could not bind on Spines daemon.\n");
-    exit(1);
+    goto fail_close;
   }
 
+  /* MCAST CLUGE */
+  sscanf(SPINES_MCAST_ADDR, "%d.%d.%d.%d", &i1, &i2, &i3, &i4);
+  NET.spines_mcast_addr = ( (i1 << 24 ) | (i2 << 16) | (i3 << 8) | i4 );
+  NET.spines_mcast_port = 0XFF00 | i4;
+
+  mreq.imr_multiaddr.s_addr = htonl(NET.spines_mcast_addr);
+  mreq.imr_interface.s_addr = htonl(INADDR_ANY);
+  if (spines_setsockopt(spines_recv_sk, IPPROTO_IP, SPINES_ADD_MEMBERSHIP, (void *)&mreq, sizeof(mreq)) < 0) {
+    Alarm(PRINT, "spines_setsockopt for mcast membership failed\n");
+    goto fail_close;
+  }
+
+  lb = 0;
+  if (spines_setsockopt(spines_recv_sk, IPPROTO_IP, SPINES_MULTICAST_LOOP, (void *)&lb, sizeof(lb)) < 0) {
+    Alarm(PRINT, "spines_setsockopt for mcast loopback failed\n");
+    goto fail_close;
+  }
+  /* END MCAST CLUGE */
+
   /* Register the socket with the event system */
-  priority = MEDIUM_PRIORITY;
+  priority = HIGH_PRIORITY;
+  E_attach_fd(spines_recv_sk, READ_FD, Net_Srv_Recv, SPINES_SOURCE,
+	      NULL, priority ); //MEDIUM_PRIORITY );
+#endif
+
+  /* ========== Connect to spines for Priority (Timely) ========= */
+  spines_recv_sk = -1;
+  memset(&spines_addr, 0, sizeof(spines_addr));  
+  memset(&my_addr, 0, sizeof(my_addr));  
+
+  protocol = 8 | (1 << 8);
+
+#if 0
+  if (my_ip != spines_ip || USE_SPINES_IPC == 0)  /* TCP */
+  {
+      spines_addr.sin_family = AF_INET;
+      spines_addr.sin_port   = htons(SPINES_PORT);
+      spines_addr.sin_addr.s_addr = spines_ip;
+      spines_recv_sk = spines_socket(PF_SPINES, SOCK_DGRAM, protocol, 
+                     (struct sockaddr *)&spines_addr);
+  } else { /* IPC */
+      spines_uaddr.sun_family = AF_UNIX;
+      sprintf(spines_uaddr.sun_path, "%s%d", "/tmp/spines", SPINES_PORT);
+      //printf("Spines Unix Socket to %s!\n", spines_uaddr.sun_path);
+      spines_recv_sk = spines_socket(PF_SPINES, SOCK_DGRAM, protocol, 
+                       (struct sockaddr *)&spines_uaddr);
+  }
+#endif
+
+  spines_uaddr.sun_family = AF_UNIX;
+  sprintf(spines_uaddr.sun_path, "%s%d", "/tmp/spines", SPINES_PORT);
+  //printf("Spines Unix Socket to %s!\n", spines_uaddr.sun_path);
+  spines_recv_sk = spines_socket(PF_SPINES, SOCK_DGRAM, protocol, 
+                   (struct sockaddr *)&spines_uaddr);
+
+  if(spines_recv_sk == -1) {
+    Alarm(DEBUG, "%d Could not connect to Spines daemon.\n", VAR.My_Server_ID );
+    goto fail;
+  } 
+
+  /* Setting k-paths to k = 0, which is the default */
+  kpaths = 1;
+  if (spines_setsockopt(spines_recv_sk, 0, SPINES_DISJOINT_PATHS, (void *)&kpaths, 
+        sizeof(int16u)) < 0) {
+    Alarm(PRINT, "spines_setsockopt failed for disjoint paths\n");
+    goto fail_close;
+  }
+
+  /* setup priority garbage collection settings */
+  exp.sec  = SPINES_EXP_TIME_SEC;
+  exp.usec = SPINES_EXP_TIME_USEC;
+  if (spines_setsockopt(spines_recv_sk, 0, SPINES_SET_EXPIRATION, (void *)&exp, 
+        sizeof(spines_nettime)) < 0) {
+    Alarm(PRINT, "Error setting expiration time for SPINES_PRIORITY type!");
+    goto fail_close;
+  }
+
+  /* Set the buffer size of the socket */
+  max_rcv_buff(spines_recv_sk);
+  max_snd_buff(spines_recv_sk);
+
+  /* Bind to my unique port */  
+  my_addr.sin_addr.s_addr = my_ip;
+  my_addr.sin_port        = htons(PRIME_SPINES_SERVER_BASE_PORT + VAR.My_Server_ID);
+      
+  ret = spines_bind(spines_recv_sk, (struct sockaddr *)&my_addr,
+		    sizeof(struct sockaddr_in));
+  if (ret == -1) {
+    Alarm(PRINT, "Could not bind on Spines daemon.\n");
+    goto fail_close;
+  }
+
+  /* MCAST CLUGE */
+  sscanf(SPINES_MCAST_ADDR, "%d.%d.%d.%d", &i1, &i2, &i3, &i4);
+  NET.spines_mcast_addr = ( (i1 << 24 ) | (i2 << 16) | (i3 << 8) | i4 );
+  NET.spines_mcast_port = 0XFF00 | i4;
+
+  mreq.imr_multiaddr.s_addr = htonl(NET.spines_mcast_addr);
+  mreq.imr_interface.s_addr = htonl(INADDR_ANY);
+  if (spines_setsockopt(spines_recv_sk, IPPROTO_IP, SPINES_ADD_MEMBERSHIP, (void *)&mreq, 
+        sizeof(mreq)) < 0) {
+    Alarm(PRINT, "spines_setsockopt for mcast membership failed\n");
+    goto fail_close;
+  }
+
+  lb = 0;
+  if (spines_setsockopt(spines_recv_sk, IPPROTO_IP, SPINES_MULTICAST_LOOP, (void *)&lb, 
+        sizeof(lb)) < 0) {
+    Alarm(PRINT, "spines_setsockopt for mcast loopback failed\n");
+    goto fail_close;
+  }
+  /* END MCAST CLUGE */
+
+  /* Register the socket with the event system */
+  priority = HIGH_PRIORITY;
   E_attach_fd(spines_recv_sk, READ_FD, Net_Srv_Recv, SPINES_SOURCE,
 	      NULL, priority ); //MEDIUM_PRIORITY );
   
-  NET.Spines_Channel = spines_recv_sk;
-
   Alarm(PRINT, "Successfully connected to Spines!\n");
+  NET.Spines_Channel = spines_recv_sk;
+  return;
+
+fail_close:
+  spines_close(spines_recv_sk);
+fail:
+  NET.Spines_Channel = -1;
+  E_queue(Initialize_Spines, 0, NULL, t);
 }
 #endif
 
@@ -439,34 +613,60 @@ void Net_Srv_Recv(channel sk, int source, void *dummy_p)
 {
   int received_bytes, ret;
   signed_message *mess;
+  sp_time t = {SPINES_CONNECT_SEC, SPINES_CONNECT_USEC};
 
   /* Read the packet from the socket */
   if(source == UDP_SOURCE)
-    received_bytes = DL_recv(sk, &srv_recv_scat);
+    received_bytes = DL_recv(sk, &srv_recv_scat);  
 #ifdef SET_USE_SPINES
   else if(source == SPINES_SOURCE) {
     received_bytes = spines_recvfrom(sk, srv_recv_scat.elements[0].buf, 
 				     PRIME_MAX_PACKET_SIZE, 0, NULL, 0);
     if(received_bytes <= 0) {
       Alarm(PRINT, "Error: Lost connection to spines...\n");
-      exit(0);
+      E_detach_fd(NET.Spines_Channel, READ_FD);
+      spines_close(NET.Spines_Channel);
+      NET.Spines_Channel = -1;
+      if (!E_in_queue(Initialize_Spines, 0, NULL))
+        E_queue(Initialize_Spines, 0, NULL, t);
+      return;
+    }
+    
+    mess = (signed_message*)srv_recv_scat.elements[0].buf;
+    if (DATA.VIEW.view_change_done == 0 && 
+        UTIL_Get_Server_Spines_Address(mess->machine_id) != 
+            UTIL_Get_Server_Spines_Address(VAR.My_Server_ID))
+    {
+        DATA.VIEW.vc_stats_recv_bytes += received_bytes;
     }
   }
 #endif
   else if(source == TCP_SOURCE) {
-    ret = TCP_Read(sk, srv_recv_scat.elements[0].buf, 
-		   sizeof(signed_update_message));
+    ret = NET_Read(sk, srv_recv_scat.elements[0].buf, 
+            sizeof(signed_update_message));
     if(ret <= 0) {
       perror("read");
       close(sk);
       E_detach_fd(sk, READ_FD);
-      /* TODO: I should keep track of which client this is for and 
-       * set the corresponding entry in NET.client_sd[] back to 0. */
+      if (sk == NET.from_client_sd) {
+        NET.from_client_sd = 0;
+        NET.to_client_sd = 0;
+      }
       return;
     }
-    else
-      received_bytes = sizeof(signed_update_message);
-  } 
+    received_bytes = sizeof(signed_update_message);
+  }
+#if USE_IPC_CLIENT
+  else if (source == IPC_SOURCE) { 
+    ret = IPC_Recv(sk, srv_recv_scat.elements[0].buf,
+                sizeof(signed_update_message));
+    if (ret <= 0) {
+        perror("Read from IPC Source bad, dropping packet");
+        return;
+    }
+    received_bytes = sizeof(signed_update_message);
+  }
+#endif
   else {
     Alarm(EXIT, "Unexpected packet source!\n");
     return;
@@ -475,25 +675,27 @@ void Net_Srv_Recv(channel sk, int source, void *dummy_p)
   /* Process the packet */
   mess = (signed_message*)srv_recv_scat.elements[0].buf;
 
-  if(source == TCP_SOURCE) {
-    assert(mess->type == UPDATE);
-
+  if(source == TCP_SOURCE || source == IPC_SOURCE) {
+    if (mess->type != UPDATE) {
+        Alarm(PRINT, "Network: Got invalid mess type from client: %d\n", mess->type);
+        return;
+    }
+    
     /* Store the socket so we know how to send a response */
-    if(NET.client_sd[mess->machine_id] == 0)
-      NET.client_sd[mess->machine_id] = sk;
+    /* if(NET.client_sd[mess->machine_id] == 0)
+      NET.client_sd[mess->machine_id] = sk; */
   }
 
   /* 1) Validate the Packet.  If the message does not validate, drop it. */
   if (!VAL_Validate_Message(mess, received_bytes)) {
-    Alarm(DEBUG, "VALIDATE FAILED for type %d from server %d\n", mess->type, mess->machine_id);
+    Alarm(PRINT, "VALIDATE FAILED for type %d\n", mess->type);
     return;
   }
 
-  /* No Conflict, Apply the message to our data structures. */
-  APPLY_Message_To_Data_Structs(mess);
-  /* Now dispatch the mesage so that is will be processed by the
-   * appropriate protocol */
-  DIS_Dispatch_Message(mess);
+  /* NEW - Process message both applies and (potentially) dispatches
+   *    new messages as a result */
+  PROCESS_Message(mess);
+  
   /* The following checks to see if the packet has been stored and, if so, it
    * allocates a new packet for the next incoming message. */
   if(get_ref_cnt(srv_recv_scat.elements[0].buf) > 1) {
@@ -506,30 +708,40 @@ void Net_Srv_Recv(channel sk, int source, void *dummy_p)
   } 
 }
 
+#if !USE_IPC_CLIENT
 void NET_Client_Connection_Acceptor(int sd, int dummy, void *dummyp)
 {
   struct sockaddr_in client_addr;
   socklen_t len;
   int connfd;
 
-  len    = sizeof(client_addr);
-  if((connfd = accept(sd, (struct sockaddr *)&client_addr, &len)) < 0) {
+  if (NET.from_client_sd != 0) {
+    Alarm(PRINT, "NET_Client_Connection_Acceptor: Cannot accept new client, "
+                " Application Replica already connected\n");
+    return;
+  }
+
+  len = sizeof(client_addr);
+  connfd = accept(sd, (struct sockaddr *)&client_addr, &len);
+
+  if (connfd < 0) {
     perror("accept");
     exit(0);
   }
   Alarm(PRINT, "Accepted a client connection!\n");
+  NET.from_client_sd = NET.to_client_sd = connfd;
   
-  E_attach_fd(connfd, READ_FD, Net_Srv_Recv, TCP_SOURCE, NULL, 
-	      MEDIUM_PRIORITY);
+  E_attach_fd(connfd, READ_FD, Net_Srv_Recv, TCP_SOURCE, NULL, MEDIUM_PRIORITY);
 }
+#endif
 
 int max_rcv_buff(int sk)
 {
   /* Increasing the buffer on the socket */
   int i, val, ret;
   unsigned int lenval;
-  
-  for(i=10; i <= 300000; i+=5) {
+
+  for(i=10; i <= 3000; i+=5) {
     val = 1024*i;
     ret = setsockopt(sk, SOL_SOCKET, SO_RCVBUF, (void *)&val, sizeof(val));
     if (ret < 0)
@@ -540,7 +752,6 @@ int max_rcv_buff(int sk)
       break;
   }
   return(1024*(i-5));
-
 }
 
 int max_snd_buff(int sk)
@@ -549,7 +760,7 @@ int max_snd_buff(int sk)
   int i, val, ret;
   unsigned int lenval;
 
-  for(i=10; i <= 300000; i+=5) {
+  for(i=10; i <= 3000; i+=5) {
     val = 1024*i;
     ret = setsockopt(sk, SOL_SOCKET, SO_SNDBUF, (void *)&val, sizeof(val));
     if (ret < 0)
