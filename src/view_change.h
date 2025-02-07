@@ -20,14 +20,19 @@
  *   Jonathan Kirsch      jak@cs.jhu.edu
  *   John Lane            johnlane@cs.jhu.edu
  *   Marco Platania       platania@cs.jhu.edu
- *   Amy Babay            babay@cs.jhu.edu
- *   Thomas Tantillo      tantillo@cs.jhu.edu
+ *   Amy Babay            babay@pitt.edu
+ *   Thomas Tantillo      tantillo@cs.jhu.edu 
+ *
  *
  * Major Contributors:
  *   Brian Coan           Design of the Prime algorithm
- *   Jeff Seibert         View Change protocol
+ *   Jeff Seibert         View Change protocol 
+ *   Sahiti Bommareddy    Reconfiguration 
+ *   Maher Khan           Reconfiguration 
+ * 
+ *
  *      
- * Copyright (c) 2008-2020
+ * Copyright (c) 2008-2024
  * The Johns Hopkins University.
  * All rights reserved.
  * 
